@@ -227,44 +227,76 @@ function schedule(ms) {
   timer = setTimeout(refresh, ms);
 }
 
-async function toggle() {
-  expanded = !expanded;
-  slab.hidden = !expanded;
-  actions.hidden = !expanded;
+// ── Sizing ──────────────────────────────────────────────────────────────
+//
+// NOTHING HERE DECLARES A HEIGHT. The page measures whatever it currently is
+// and the window follows, for every state and every message inside a state. A
+// declared height is a guess about how text wraps in a font this machine may
+// not have, and it is wrong the first time an error runs to three lines: the
+// card is anchored to the bottom, so the extra lines grow off the TOP and take
+// the title with them, which reads as a cut-off window rather than a long
+// message.
 
-  try {
-    await invoke('place_window', { mode: expanded ? 'expanded' : 'compact' });
-  } catch (e) {
-    console.error('place_window failed', e);
-  }
+let lastHeight = 0;
+let queued = false;
+
+function contentHeight() {
+  const style = getComputedStyle(document.body);
+  const panels = [...document.body.children].filter(
+    (el) => el.tagName !== 'SCRIPT' && !el.hidden,
+  );
+
+  return Math.ceil(
+    panels.reduce((total, el) => total + el.getBoundingClientRect().height, 0) +
+      (parseFloat(style.rowGap) || 0) * Math.max(0, panels.length - 1) +
+      parseFloat(style.paddingTop) +
+      parseFloat(style.paddingBottom),
+  );
 }
 
 /**
- * Show or hide the setup panel, and size the window to it.
+ * Ask for a window that fits the page.
  *
- * The height cannot be a constant on this side either: it is however tall the
- * explanation happens to wrap to in whatever font Windows resolved and at
- * whatever text scaling is set. Measuring is the only way to be right on a
- * machine this was not written on. Laying out is not affected by the window
- * being too small to show the result, so this reads true even while the panel
- * is still clipped.
+ * Coalesced to one call per frame: showing a panel and writing its text are
+ * two changes that must not become two resizes. `force` is for the case where
+ * the height is unchanged but the WIDTH is not, which is opening and closing.
  */
-async function showSetup(show) {
-  setup.hidden = !show;
+function fit(force = false) {
+  if (queued) return;
+  queued = true;
 
-  if (!show) {
-    return invoke('place_window', { mode: 'compact' }).catch(() => {});
-  }
+  requestAnimationFrame(async () => {
+    queued = false;
+    const height = contentHeight();
+    if (height === lastHeight && !force) return;
+    lastHeight = height;
 
-  const style = getComputedStyle(document.body);
-  const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-  const gap = parseFloat(style.rowGap) || 0;
-  const height = Math.ceil(
-    setup.getBoundingClientRect().height + card.getBoundingClientRect().height + padding + gap,
-  );
-
-  return invoke('place_window', { mode: 'setup', height }).catch(() => {});
+    try {
+      await invoke('place_window', { expanded, height });
+    } catch (e) {
+      console.error('place_window failed', e);
+    }
+  });
 }
+
+// Any panel changing size for any reason resizes the window. This is what
+// makes it unnecessary to remember to call anything after changing any text,
+// and what makes a screen that does not exist yet work without being taught.
+const sizes = new ResizeObserver(() => fit());
+for (const panel of [slab, setup, card]) sizes.observe(panel);
+
+function toggle() {
+  expanded = !expanded;
+  slab.hidden = !expanded;
+  actions.hidden = !expanded;
+  fit(true);
+}
+
+function showSetup(show) {
+  setup.hidden = !show;
+  fit(true);
+}
+
 
 card.addEventListener('click', (event) => {
   if (event.target.closest('.btn') || setup.hidden === false) return;
@@ -286,7 +318,7 @@ snoozeBtn.addEventListener('click', async (event) => {
 listen('deep-link', async ({ payload }) => {
   if (payload?.action === 'connect' && payload.server) {
     serverInput.value = payload.server;
-    await showSetup(true);
+    showSetup(true);
     connectBtn.click();
   }
 }).catch((e) => console.error('deep-link listener', e));
@@ -317,7 +349,7 @@ connectBtn.addEventListener('click', async () => {
 
   try {
     await invoke('connect', { server });
-    await showSetup(false);
+    showSetup(false);
     await refresh();
   } catch (e) {
     setupNote.textContent = String(e);
@@ -338,7 +370,7 @@ connectBtn.addEventListener('click', async () => {
 
   if (!config.server_url || !config.client_id) {
     renderIdle('Not connected yet.');
-    await showSetup(true);
+    showSetup(true);
     serverInput.focus();
     return;
   }

@@ -29,29 +29,28 @@ fn intent_payload(intent: &deeplink::Intent) -> serde_json::Value {
 /// Compact card: one glyph, one number, one strip. Readable in a glance.
 const COMPACT: (i32, i32) = (292, 88);
 
-/// Expanded: the bar plus the ledger above it.
-const EXPANDED_HEIGHT: i32 = 420;
-
-/// What the setup panel is allowed to ask for, in logical pixels.
+/// The shortest window worth drawing, in logical pixels.
 ///
-/// Setup is the one state whose height is not a design decision: it depends on
-/// how its explanatory text wraps, which depends on the font Windows actually
-/// resolves and on the user's text scaling. A constant here would be a guess
-/// made on a different machine, so the page measures itself and sends the
-/// number. The clamp is only there so a broken measurement cannot produce a
-/// window the size of the screen or one nobody can see.
-const SETUP_HEIGHT: (i32, i32) = (140, 460);
+/// There is no matching maximum here on purpose. HEIGHT IS NOT DECLARED
+/// ANYWHERE IN THIS APP: the page measures whatever it currently is and sends
+/// the number, for every state and every message inside a state. A constant
+/// would be a guess about how text wraps in a font this machine may not have,
+/// and it is wrong the first time an error message runs to three lines. The
+/// only ceiling is the work area, applied below, because a window taller than
+/// the screen helps nobody.
+const MIN_HEIGHT: i32 = 56;
 
 const TRAY_ID: &str = "kaizen";
 
-/// Put the window where it belongs and size it for the state it is in.
+/// Put the window where it belongs and size it to what the page says it is.
 ///
-/// Every state shares the bottom-right anchor, so opening grows the card up
-/// and to the left and the lamp itself never moves.
+/// Every state shares the bottom-right anchor, so growing happens up and to
+/// the left and the lamp itself never moves.
 ///
-/// `height` is read only in setup, where the page has measured itself.
+/// `expanded` decides the WIDTH, which is a design decision. `height` is
+/// whatever the page measured, which is not.
 #[tauri::command]
-fn place_window(window: WebviewWindow, mode: String, height: Option<i32>) -> Result<(), String> {
+fn place_window(window: WebviewWindow, expanded: bool, height: Option<i32>) -> Result<(), String> {
     let scale = window.scale_factor().unwrap_or(1.0);
 
     let area = placement::work_area().unwrap_or_else(|| {
@@ -82,23 +81,17 @@ fn place_window(window: WebviewWindow, mode: String, height: Option<i32>) -> Res
 
     let logical = |n: i32| (n as f64 * scale).round() as i32;
 
-    let (width, height) = match mode.as_str() {
-        "expanded" => (
-            placement::expanded_width(area, scale),
-            logical(EXPANDED_HEIGHT),
-        ),
-        "setup" => (
-            logical(COMPACT.0),
-            logical(
-                height
-                    .unwrap_or(SETUP_HEIGHT.1)
-                    .clamp(SETUP_HEIGHT.0, SETUP_HEIGHT.1),
-            ),
-        ),
-        // Anything unrecognised is the compact card, which is the state it is
-        // always safe to be in.
-        _ => (logical(COMPACT.0), logical(COMPACT.1)),
+    let width = if expanded {
+        placement::expanded_width(area, scale)
+    } else {
+        logical(COMPACT.0)
     };
+
+    // The page has not measured itself yet on the very first call, so the
+    // compact height stands in until it has.
+    let asked = logical(height.unwrap_or(COMPACT.1));
+    let ceiling = (area.height() - logical(placement::MARGIN) * 2).max(logical(MIN_HEIGHT));
+    let height = asked.clamp(logical(MIN_HEIGHT), ceiling);
 
     let (x, y) = placement::anchor(area, width, height, scale);
 
@@ -407,7 +400,7 @@ pub fn run() {
                 .build(app)?;
 
             if let Some(window) = app.get_webview_window("main") {
-                let _ = place_window(window, "compact".into(), None);
+                let _ = place_window(window, false, None);
             }
 
             // A cold start from a deep link: the URL is in our own arguments.
