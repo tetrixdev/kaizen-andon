@@ -16,6 +16,17 @@
     <div class="etable" id="entries"></div>
   </div>
 
+  <!-- First run: the build is generic, so it has to be told which Kaizen is
+       yours. Nothing else is reachable until it is. -->
+  <div class="setup" id="setup" hidden>
+    <p class="setup-title"><span class="setup-glyph">灯</span>Which Kaizen is yours?</p>
+    <div class="setup-row">
+      <input id="server" class="inp" type="text" placeholder="kaizen.example.com" spellcheck="false" autocomplete="off">
+      <button class="btn btn-seal" id="connectBtn">Connect</button>
+    </div>
+    <p class="setup-note" id="setupNote">Your browser opens to approve it. Nothing but the token is kept.</p>
+  </div>
+
   <!-- The card. The whole thing is one button. -->
   <div class="andon lit-wait" id="card" data-tauri-drag-region>
     <div class="lamp" id="lamp">灯</div>

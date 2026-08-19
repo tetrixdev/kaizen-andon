@@ -254,3 +254,48 @@ body {
 .btn-seal { background: var(--vermilion); color: #fff; }
 .btn-ghost { background: transparent; border-color: var(--rule); color: var(--ink-soft); }
 .btn:hover { filter: brightness(.95); }
+
+/* ── First run ──────────────────────────────────────────── */
+.setup {
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  border-radius: 13px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .1), 0 8px 22px -12px rgba(0, 0, 0, .4);
+  flex: none;
+}
+
+.setup-title {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.setup-glyph { font-size: 22px; color: var(--vermilion); }
+
+.setup-row { display: flex; gap: 7px; }
+
+.inp {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  border-radius: 9px;
+  border: 1px solid var(--rule);
+  background: var(--paper-sunk);
+  color: var(--ink);
+  padding: 0 10px;
+  font-family: var(--sans);
+  font-size: 13px;
+}
+
+.inp:focus { outline: none; border-color: var(--vermilion); }
+
+.setup-note { margin: 0; font-size: 11px; color: var(--ink-faint); line-height: 1.5; }
+
+.btn:disabled { opacity: .6; cursor: default; }

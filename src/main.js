@@ -1,9 +1,9 @@
 // Kaizen Desktop: the lamp.
 //
-// Almost no logic lives here. The rules are server-side in Kaizen's own
-// App\Support\Ledger, so this file only renders what came back and asks Rust
-// to place the window. That is deliberate: two implementations of "what counts
-// as a hole" would drift within a week.
+// Almost no logic lives here. Kaizen's own App\Support\Ledger decides what a
+// hole is, which state the lamp is in and when the question turns from 灯 to
+// 印; this file renders the answer and asks Rust to place the window. Two
+// implementations of those rules would drift within a week.
 
 const { invoke } = window.__TAURI__.core;
 
@@ -16,21 +16,33 @@ const track = document.getElementById('track');
 const slab = document.getElementById('slab');
 const slabTitle = document.getElementById('slabTitle');
 const slabHint = document.getElementById('slabHint');
-const entries = document.getElementById('entries');
+const entriesEl = document.getElementById('entries');
 const actions = document.getElementById('actions');
+const setup = document.getElementById('setup');
+const serverInput = document.getElementById('server');
+const connectBtn = document.getElementById('connectBtn');
+const setupNote = document.getElementById('setupNote');
+const discussBtn = document.getElementById('discuss');
 
 const STATE_CLASSES = ['lit-wait', 'lit-ok', 'lit-warm', 'lit-call', 'lit-off'];
+const LAMP_FOR = { waiting: 'lit-wait', running: 'lit-ok', attention: 'lit-warm', call: 'lit-call', quiet: 'lit-off' };
+
+// Under the threshold the lamp is barely saying anything, so asking often is
+// waste. Once it has something to say, look more often.
+const CALM_MS = 5 * 60 * 1000;
+const LOUD_MS = 60 * 1000;
 
 let expanded = false;
 let ledger = null;
+let timer = null;
 
 const hhmm = (m) => `${Math.floor(Math.max(0, m) / 60)}:${String(Math.max(0, m) % 60).padStart(2, '0')}`;
 const toMinutes = (t) => {
   const [h, m] = String(t ?? '0:00').split(':').map(Number);
   return (h || 0) * 60 + (m || 0);
 };
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-/** The window's span, from the context's own hours. */
 function windowBounds(l) {
   const match = /(\d{2}:\d{2})\D+(\d{2}:\d{2})/.exec(l.window ?? '');
   const open = match ? toMinutes(match[1]) : 8 * 60;
@@ -55,21 +67,21 @@ function renderTrack(l) {
     if (started > open) parts.push(`<span class="seg dead" style="${place(open, started, open, span)}"></span>`);
   }
 
-  // Alternating weight is positional only: it flips on consecutive work and
-  // resets whenever a rest or a gap sits between, because the boundary is
-  // already obvious there.
+  // The alternation is positional only: it flips on consecutive work and
+  // resets after a rest or a hole, where the boundary is already obvious.
   let alt = false;
   for (const e of l.entries ?? []) {
     const from = toMinutes(e.from);
     const to = toMinutes(e.to);
+    const title = esc(`${e.from}–${e.to} · ${e.description ?? (e.kind === 'work' ? 'Work' : 'Rest')}`);
 
     if (e.kind === 'work') {
       alt = !alt;
       const unref = l.logs_externally && !e.referenced ? ' unref' : '';
-      parts.push(`<span class="seg work${alt ? ' alt' : ''}${unref}" style="${place(from, to, open, span)}" title="${e.from}–${e.to} · ${e.description ?? 'Work'}"></span>`);
+      parts.push(`<span class="seg work${alt ? ' alt' : ''}${unref}" style="${place(from, to, open, span)}" title="${title}"></span>`);
     } else {
       alt = false;
-      parts.push(`<span class="seg rest" style="${place(from, to, open, span)}" title="${e.from}–${e.to} · ${e.description ?? 'Rest'}"></span>`);
+      parts.push(`<span class="seg rest" style="${place(from, to, open, span)}" title="${title}"></span>`);
     }
   }
 
@@ -93,27 +105,27 @@ function renderEntries(l) {
     const pill = !l.logs_externally || e.kind !== 'work'
       ? (e.kind === 'rest' ? '<span class="pill">rest</span>' : '')
       : e.referenced
-        ? `<span class="pill ok">✓ ${e.reference}</span>`
+        ? `<span class="pill ok">✓ ${esc(e.reference)}</span>`
         : '<span class="pill pending">no reference</span>';
 
     rows.push(`<div class="erow ${e.kind === 'rest' ? 'rest-row' : ''}">
-      <span class="e-time">${e.from}–${e.to}</span>
+      <span class="e-time">${esc(e.from)}–${esc(e.to)}</span>
       <span class="e-dur">${hhmm(e.minutes)}</span>
-      <span class="e-what">${e.description ?? (e.kind === 'work' ? 'Work' : 'Rest')}</span>
+      <span class="e-what">${esc(e.description ?? (e.kind === 'work' ? 'Work' : 'Rest'))}</span>
       ${pill}
     </div>`);
   }
 
   for (const g of l.gaps ?? []) {
     rows.push(`<div class="erow gap-row">
-      <span class="e-time">${g.from}–${g.to}</span>
+      <span class="e-time">${esc(g.from)}–${esc(g.to)}</span>
       <span class="e-dur">${hhmm(g.minutes)}</span>
       <span class="e-what">Unaccounted</span>
       <span class="pill open">open</span>
     </div>`);
   }
 
-  entries.innerHTML = rows.join('') || '<div class="erow"><span class="e-what">Nothing filed yet.</span></div>';
+  entriesEl.innerHTML = rows.join('') || '<div class="erow"><span class="e-what">Nothing filed yet.</span></div>';
   slabTitle.textContent = `${l.context} · ${l.date}`;
   slabHint.textContent = l.logs_externally
     ? 'Work here is logged in another system too, so an entry counts only with a reference and a link.'
@@ -124,10 +136,7 @@ function render(l) {
   ledger = l;
 
   card.classList.remove(...STATE_CLASSES, 'phase-accounting', 'phase-referencing');
-  card.classList.add(
-    { waiting: 'lit-wait', running: 'lit-ok', attention: 'lit-warm', call: 'lit-call', quiet: 'lit-off' }[l.state] ?? 'lit-wait',
-    `phase-${l.phase}`,
-  );
+  card.classList.add(LAMP_FOR[l.state] ?? 'lit-wait', `phase-${l.phase}`);
 
   lamp.textContent = l.phase === 'referencing' ? '印' : '灯';
 
@@ -152,11 +161,52 @@ function render(l) {
 
   renderTrack(l);
   renderEntries(l);
-  actions.hidden = !expanded;
 }
 
-/** Opening moves both axes on one curve; the anchor is bottom-right, so the
- *  lamp does not move. Rust owns the geometry. */
+/** A day with no context carrying a target is not an error. */
+function renderIdle(message) {
+  ledger = null;
+  card.classList.remove(...STATE_CLASSES);
+  card.classList.add('lit-off');
+  lamp.textContent = '灯';
+  delta.textContent = '—:—';
+  deltaLabel.textContent = '';
+  sub.textContent = message;
+  track.innerHTML = '';
+  entriesEl.innerHTML = '';
+}
+
+async function refresh() {
+  try {
+    const day = await invoke('fetch_day', { date: null });
+    const leading = pickLeading(day.ledgers ?? []);
+
+    if (!leading) {
+      renderIdle('Nothing carries a target today.');
+      return schedule(CALM_MS);
+    }
+
+    render(leading);
+    schedule(['call', 'attention'].includes(leading.state) ? LOUD_MS : CALM_MS);
+  } catch (e) {
+    // A network blip must not blank the card: keep the last reading and say
+    // it is stale rather than pretending the day is suddenly empty.
+    sub.textContent = ledger ? `${sub.textContent} · not reachable` : String(e);
+    schedule(LOUD_MS);
+  }
+}
+
+/** A card this small asks one question at a time; the loudest wins. */
+function pickLeading(ledgers) {
+  const rank = { call: 0, attention: 1, waiting: 2, running: 3, quiet: 4 };
+  return [...ledgers].sort((a, b) => (rank[a.state] ?? 9) - (rank[b.state] ?? 9))[0] ?? null;
+}
+
+function schedule(ms) {
+  clearTimeout(timer);
+  timer = setTimeout(refresh, ms);
+}
+
 async function toggle() {
   expanded = !expanded;
   slab.hidden = !expanded;
@@ -170,45 +220,62 @@ async function toggle() {
 }
 
 card.addEventListener('click', (event) => {
-  // The drag region and the buttons are not the toggle.
-  if (event.target.closest('.btn')) return;
+  if (event.target.closest('.btn') || setup.hidden === false) return;
   toggle();
 });
 
-document.getElementById('discuss').addEventListener('click', (event) => {
+discussBtn.addEventListener('click', async (event) => {
   event.stopPropagation();
-  // Filled in once the API client lands: this copies the day, its gaps and the
-  // context's own integration prompt to the clipboard.
+  const original = discussBtn.textContent;
+
+  try {
+    const { prompt, bootstrap } = await invoke('fetch_prompt', { date: null });
+    await navigator.clipboard.writeText(prompt);
+    discussBtn.textContent = bootstrap ? 'Copied · it will ask how' : 'Copied · paste it in';
+  } catch (e) {
+    discussBtn.textContent = 'Could not copy';
+    console.error(e);
+  }
+
+  setTimeout(() => { discussBtn.textContent = original; }, 4000);
 });
 
-// Until the connection exists, show what an unconnected widget honestly is.
+connectBtn.addEventListener('click', async () => {
+  const server = serverInput.value.trim();
+  if (!server) return;
+
+  connectBtn.disabled = true;
+  connectBtn.textContent = 'Waiting for your browser…';
+  setupNote.textContent = 'Approve it in the tab that just opened.';
+
+  try {
+    await invoke('connect', { server });
+    setup.hidden = true;
+    await refresh();
+  } catch (e) {
+    setupNote.textContent = String(e);
+  } finally {
+    connectBtn.disabled = false;
+    connectBtn.textContent = 'Connect';
+  }
+});
+
 (async () => {
   let config = {};
+
   try {
     config = await invoke('load_config');
   } catch (e) {
     console.error('load_config failed', e);
   }
 
-  if (!config.server_url) {
-    render({
-      context: 'Kaizen',
-      date: '',
-      window: null,
-      state: 'waiting',
-      phase: 'accounting',
-      gap_minutes: 0,
-      work_minutes: 0,
-      unreferenced_minutes: 0,
-      logs_externally: false,
-      entries: [],
-      gaps: [],
-    });
-    sub.textContent = 'Not connected. Open Kaizen in your browser to connect.';
+  if (!config.server_url || !config.client_id) {
+    setup.hidden = false;
+    renderIdle('Not connected yet.');
+    serverInput.focus();
     return;
   }
 
-  // The API client is the next piece; until then the card sits waiting rather
-  // than pretending to know anything.
-  sub.textContent = config.server_url;
+  setup.hidden = true;
+  await refresh();
 })();
