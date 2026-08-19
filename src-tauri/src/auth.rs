@@ -527,3 +527,114 @@ mod tests {
         assert!(registration.client_secret.is_none());
     }
 }
+
+// ── The flow, end to end ────────────────────────────────────────────────
+
+/// Everything worth keeping once a connection is made. The refresh token is
+/// the sensitive half; `state.rs` decides where it lands.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Connection {
+    pub server: String,
+    pub client_id: String,
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+}
+
+fn client() -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .user_agent(concat!("KaizenDesktop/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .expect("a client with no proxy configuration always builds")
+}
+
+pub fn discover(server: &str) -> Result<Discovery, String> {
+    let discovery: Discovery = client()
+        .get(discovery_url(server))
+        .send()
+        .map_err(|e| format!("could not reach {server}: {e}"))?
+        .error_for_status()
+        .map_err(|_| format!("{server} does not look like a Kaizen"))?
+        .json()
+        .map_err(|e| format!("{server} answered something unexpected: {e}"))?;
+
+    if !discovery.supports_pkce() {
+        return Err(
+            "that server will not do PKCE, and this app will not connect without it".into(),
+        );
+    }
+
+    Ok(discovery)
+}
+
+/// Register this install. Kaizen accepts this unauthenticated, which is how
+/// claude.ai registers its connector, so nothing has to ship in the binary.
+pub fn register(discovery: &Discovery, redirect_uri: &str) -> Result<Registration, String> {
+    let endpoint = discovery
+        .registration_endpoint
+        .as_ref()
+        .ok_or("that server does not offer client registration")?;
+
+    client()
+        .post(endpoint)
+        .json(&serde_json::json!({
+            "client_name": "Kaizen Desktop",
+            "redirect_uris": [redirect_uri],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+        }))
+        .send()
+        .map_err(|e| format!("registration failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("registration was refused: {e}"))?
+        .json()
+        .map_err(|e| format!("registration answered something unexpected: {e}"))
+}
+
+pub fn exchange_code(
+    discovery: &Discovery,
+    client_id: &str,
+    redirect_uri: &str,
+    code: &str,
+    verifier: &str,
+) -> Result<Tokens, String> {
+    client()
+        .post(&discovery.token_endpoint)
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("client_id", client_id),
+            ("redirect_uri", redirect_uri),
+            ("code", code),
+            ("code_verifier", verifier),
+        ])
+        .send()
+        .map_err(|e| format!("the token call failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("the token call was refused: {e}"))?
+        .json()
+        .map_err(|e| format!("the token call answered something unexpected: {e}"))
+}
+
+/// Access tokens expire; the refresh token is what keeps the lamp lit without
+/// sending the user back to a browser every hour.
+pub fn refresh(
+    discovery: &Discovery,
+    client_id: &str,
+    refresh_token: &str,
+) -> Result<Tokens, String> {
+    client()
+        .post(&discovery.token_endpoint)
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("client_id", client_id),
+            ("refresh_token", refresh_token),
+        ])
+        .send()
+        .map_err(|e| format!("could not refresh: {e}"))?
+        .error_for_status()
+        .map_err(|_| "the refresh token is no longer good; connect again".to_string())?
+        .json()
+        .map_err(|e| format!("the refresh answered something unexpected: {e}"))
+}

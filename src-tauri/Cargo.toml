@@ -21,6 +21,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 getrandom = "0.3"
+# Already in the tree via tauri, so taking it directly costs no extra build.
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 
 # SPI_GETWORKAREA. The taskbar's height is not a constant: it changes with DPI
 # and the small-buttons setting, it can sit on any edge, and it can auto-hide.
