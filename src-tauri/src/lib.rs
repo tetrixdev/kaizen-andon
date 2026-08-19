@@ -91,13 +91,16 @@ fn save_config(app: AppHandle, config: state::Config) -> Result<(), String> {
     config.save(&app).map_err(|e| e.to_string())
 }
 
-/// Connect to a Kaizen: discover, register, and hand the browser the consent
-/// page. Blocks until the user comes back or two minutes pass, so it runs off
-/// the UI thread.
+/// Connect to a Kaizen: discover, register if this install has not before, and
+/// hand the browser the consent page. Blocks until the user comes back or
+/// three minutes pass, so it runs off the UI thread.
 ///
-/// Re-registers on every connect rather than reusing a stored client, because
-/// the redirect URI has to name the port we actually bound and that port is
-/// not ours to reserve between runs.
+/// The client is registered ONCE and reused. RFC 8252 section 7.3 requires an
+/// authorization server to accept any port on a loopback redirect, precisely
+/// so a native app need not reserve one, and Kaizen honours it (checked
+/// against the live server). So the port may differ on every launch while the
+/// client stays the same, and reconnecting does not litter the server with
+/// dead clients nobody will ever revoke.
 #[tauri::command(async)]
 fn connect(app: AppHandle, server: String) -> Result<String, String> {
     let server = auth::normalise_server(&server).ok_or("that does not look like an address")?;
@@ -105,17 +108,18 @@ fn connect(app: AppHandle, server: String) -> Result<String, String> {
     let discovery = auth::discover(&server)?;
     let (listener, redirect) = auth::bind_loopback()
         .map_err(|e| format!("could not open a local port to come back to: {e}"))?;
-    let registration = auth::register(&discovery, &redirect)?;
+
+    let client_id = match state::Config::load(&app)
+        .unwrap_or_default()
+        .client_for(&server)
+    {
+        Some(id) => id,
+        None => auth::register(&discovery, &redirect)?.client_id,
+    };
 
     let pkce = auth::Pkce::generate();
     let expected_state = auth::random_token(24);
-    let url = auth::authorize_url(
-        &discovery,
-        &registration.client_id,
-        &redirect,
-        &pkce,
-        &expected_state,
-    );
+    let url = auth::authorize_url(&discovery, &client_id, &redirect, &pkce, &expected_state);
 
     tauri_plugin_opener::open_url(&url, None::<&str>)
         .map_err(|e| format!("could not open your browser: {e}"))?;
@@ -134,13 +138,7 @@ fn connect(app: AppHandle, server: String) -> Result<String, String> {
         return Err("the answer did not match the request; nothing was connected".into());
     }
 
-    let tokens = auth::exchange_code(
-        &discovery,
-        &registration.client_id,
-        &redirect,
-        &code,
-        &pkce.verifier,
-    )?;
+    let tokens = auth::exchange_code(&discovery, &client_id, &redirect, &code, &pkce.verifier)?;
 
     state::Secrets {
         access_token: Some(tokens.access_token),
@@ -151,7 +149,7 @@ fn connect(app: AppHandle, server: String) -> Result<String, String> {
 
     let mut config = state::Config::load(&app).unwrap_or_default();
     config.server_url = Some(server.clone());
-    config.client_id = Some(registration.client_id);
+    config.client_id = Some(client_id);
     config.save(&app).map_err(|e| e.to_string())?;
 
     Ok(server)

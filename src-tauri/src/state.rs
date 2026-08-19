@@ -81,6 +81,18 @@ impl Config {
         Ok(())
     }
 
+    /// The client already registered for this server, if it is the same one.
+    ///
+    /// Pointing the app at a different Kaizen has to register afresh: a client
+    /// belongs to the server that issued it, and reusing an id across servers
+    /// would simply be rejected.
+    pub fn client_for(&self, server: &str) -> Option<String> {
+        match (self.server_url.as_deref(), self.client_id.as_deref()) {
+            (Some(known), Some(id)) if known == server => Some(id.to_string()),
+            _ => None,
+        }
+    }
+
     pub fn is_connected(&self) -> bool {
         self.server_url
             .as_deref()
@@ -198,6 +210,26 @@ mod tests {
             ..Default::default()
         };
         assert!(config.is_connected());
+    }
+
+    #[test]
+    fn a_client_is_reused_only_for_the_server_that_issued_it() {
+        let config = Config {
+            server_url: Some("https://kaizen.tetrix.dev".into()),
+            client_id: Some("c1".into()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.client_for("https://kaizen.tetrix.dev").as_deref(),
+            Some("c1")
+        );
+        assert_eq!(
+            config.client_for("https://other.example.com"),
+            None,
+            "a client belongs to the server that issued it"
+        );
+        assert_eq!(Config::default().client_for("https://x"), None);
     }
 
     #[test]
