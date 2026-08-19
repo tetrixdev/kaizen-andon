@@ -193,36 +193,37 @@ fn disconnect(app: AppHandle) -> Result<(), String> {
     config.save(&app).map_err(|e| e.to_string())
 }
 
-/// Today, as Kaizen sees it. One retry through the refresh token, because an
-/// expired access token is the ordinary case rather than a failure.
-#[tauri::command(async)]
-fn fetch_day(app: AppHandle, date: Option<String>) -> Result<api::Day, String> {
-    let config = state::Config::load(&app).map_err(|e| e.to_string())?;
-    let server = config.server_url.ok_or("not connected")?;
+/// Every call to Kaizen, with one retry through the refresh token.
+///
+/// Factored into one place because the retry is the part that gets forgotten:
+/// an access token lives a day, so a command written without it works all
+/// afternoon and fails the next morning, in a way that looks like the server
+/// is down rather than like a missing five lines. `fetch_prompt` was exactly
+/// that until this existed.
+fn send<T: serde::de::DeserializeOwned>(
+    app: &AppHandle,
+    build: impl Fn(&reqwest::blocking::Client, &str, &str) -> reqwest::blocking::RequestBuilder,
+) -> Result<T, String> {
+    let config = state::Config::load(app).map_err(|e| e.to_string())?;
+    let server = config.server_url.clone().ok_or("not connected")?;
     let mut secrets = vault::load()?;
     let token = secrets.access_token.clone().ok_or("not connected")?;
+    let client = reqwest::blocking::Client::new();
 
-    let call = |token: &str| {
-        let mut url = api::url(&server, "/day");
-        if let Some(date) = &date {
-            url = format!("{url}?date={date}");
-        }
-
-        reqwest::blocking::Client::new()
-            .get(url)
-            .bearer_auth(token)
+    let once = |token: &str| {
+        build(&client, &server, token)
             .timeout(std::time::Duration::from_secs(20))
             .send()
     };
 
-    let response = call(&token).map_err(|e| format!("could not reach Kaizen: {e}"))?;
+    let response = once(&token).map_err(|e| format!("could not reach Kaizen: {e}"))?;
 
     let response = if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         let refresh_token = secrets
             .refresh_token
             .clone()
             .ok_or("the session expired; connect again")?;
-        let client_id = config.client_id.ok_or("not connected")?;
+        let client_id = config.client_id.clone().ok_or("not connected")?;
         let discovery = auth::discover(&server)?;
         let tokens = auth::refresh(&discovery, &client_id, &refresh_token)?;
 
@@ -232,87 +233,124 @@ fn fetch_day(app: AppHandle, date: Option<String>) -> Result<api::Day, String> {
         }
         vault::save(&secrets)?;
 
-        call(&tokens.access_token).map_err(|e| format!("could not reach Kaizen: {e}"))?
+        once(&tokens.access_token).map_err(|e| format!("could not reach Kaizen: {e}"))?
     } else {
         response
     };
 
+    let status = response.status();
+
+    if !status.is_success() {
+        // Kaizen says WHY in the body, and for a refused entry that reason is
+        // the whole message: "09:00–10:00 overlaps an entry already filed" is
+        // something to act on, where "422 Unprocessable Content" is not.
+        let body = response.text().unwrap_or_default();
+        let said = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v.get("message")?.as_str().map(str::to_owned));
+
+        return Err(said.unwrap_or_else(|| format!("Kaizen refused the request: {status}")));
+    }
+
     response
-        .error_for_status()
-        .map_err(|e| format!("Kaizen refused the request: {e}"))?
         .json()
         .map_err(|e| format!("Kaizen answered something unexpected: {e}"))
 }
 
-/// What the tray icon says on hover. The card may be hidden or snoozed; the
-/// tray is the one surface that is always there, so it carries the number.
-#[tauri::command]
-fn set_tooltip(app: AppHandle, text: String) -> Result<(), String> {
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        tray.set_tooltip(Some(&text)).map_err(|e| e.to_string())?;
+/// A path with an optional `date`, which is what most of these are.
+fn dated(server: &str, path: &str, date: &Option<String>) -> String {
+    match date {
+        Some(date) => format!("{}?date={date}", api::url(server, path)),
+        None => api::url(server, path),
     }
-
-    Ok(())
 }
 
-/// Put the lamp down until it has something else to say.
-///
-/// Only from Running: from Attention up there is no hiding, which is the rule
-/// that makes the end of the day always show.
-#[tauri::command]
-fn snooze(app: AppHandle, state: String, today: String) -> Result<(), String> {
-    if state != "running" {
-        return Err("only a quiet lamp can be put down".into());
-    }
-
-    let mut config = state::Config::load(&app).map_err(|e| e.to_string())?;
-    config.snoozed_at_state = Some(state);
-    config.snoozed_on = Some(today);
-    config.save(&app).map_err(|e| e.to_string())?;
-
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
-    }
-
-    Ok(())
+/// A day, as Kaizen sees it. Today unless a date is given, which is what the
+/// history grid asks for.
+#[tauri::command(async)]
+fn fetch_day(app: AppHandle, date: Option<String>) -> Result<api::Day, String> {
+    send(&app, |client, server, token| {
+        client.get(dated(server, "/day", &date)).bearer_auth(token)
+    })
 }
 
-#[tauri::command]
-fn wake(app: AppHandle) -> Result<(), String> {
-    let mut config = state::Config::load(&app).map_err(|e| e.to_string())?;
-    config.snoozed_at_state = None;
-    config.snoozed_on = None;
-    config.save(&app).map_err(|e| e.to_string())?;
+/// A month of tiles for the history grid.
+#[tauri::command(async)]
+fn fetch_month(app: AppHandle, month: Option<String>) -> Result<api::Month, String> {
+    send(&app, |client, server, token| {
+        let url = match &month {
+            Some(month) => format!("{}?month={month}", api::url(server, "/month")),
+            None => api::url(server, "/month"),
+        };
 
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-    }
-
-    Ok(())
+        client.get(url).bearer_auth(token)
+    })
 }
 
-/// The clipboard text: the day, its holes, and the context's own instructions.
+/// File time. A batch, because accounting for a morning is one decision and
+/// Kaizen refuses the whole set if any span overlaps another.
+#[tauri::command(async)]
+fn save_entries(
+    app: AppHandle,
+    entries: Vec<api::EntryDraft>,
+    date: Option<String>,
+) -> Result<api::Day, String> {
+    if entries.is_empty() {
+        return Err("nothing to file".into());
+    }
+
+    send(&app, |client, server, token| {
+        client
+            .post(dated(server, "/entries", &date))
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "entries": entries }))
+    })
+}
+
+/// Remove an entry, which reopens its span.
+#[tauri::command(async)]
+fn delete_entry(app: AppHandle, id: i64) -> Result<api::Day, String> {
+    send(&app, |client, server, token| {
+        client
+            .delete(api::url(server, &format!("/entries/{id}")))
+            .bearer_auth(token)
+    })
+}
+
+/// Set the day's anchor. Without one nothing can be filed at all.
+#[tauri::command(async)]
+fn start_day(app: AppHandle, at: Option<String>, date: Option<String>) -> Result<api::Day, String> {
+    send(&app, |client, server, token| {
+        client
+            .post(dated(server, "/day/start", &date))
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "at": at }))
+    })
+}
+
+/// Close a short day honestly, or reopen one closed too early.
+#[tauri::command(async)]
+fn end_day(
+    app: AppHandle,
+    at: Option<String>,
+    reopen: Option<bool>,
+    date: Option<String>,
+) -> Result<api::Day, String> {
+    send(&app, |client, server, token| {
+        client
+            .post(dated(server, "/day/end", &date))
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "at": at, "reopen": reopen.unwrap_or(false) }))
+    })
+}
+
+/// The clipboard text: the day as it stands, its holes, and the user's own
+/// instructions verbatim.
 #[tauri::command(async)]
 fn fetch_prompt(app: AppHandle, date: Option<String>) -> Result<api::Prompt, String> {
-    let config = state::Config::load(&app).map_err(|e| e.to_string())?;
-    let server = config.server_url.ok_or("not connected")?;
-    let token = vault::load()?.access_token.ok_or("not connected")?;
-
-    let mut url = api::url(&server, "/prompt");
-    if let Some(date) = date {
-        url = format!("{url}?date={date}");
-    }
-
-    reqwest::blocking::Client::new()
-        .get(url)
-        .bearer_auth(&token)
-        .timeout(std::time::Duration::from_secs(20))
-        .send()
-        .map_err(|e| format!("could not reach Kaizen: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("Kaizen refused the request: {e}"))?
-        .json()
-        .map_err(|e| format!("Kaizen answered something unexpected: {e}"))
+    send(&app, |client, server, token| {
+        client.get(dated(server, "/prompt", &date)).bearer_auth(token)
+    })
 }
 
 /// Fetch and install a newer build, if there is one.
@@ -361,7 +399,12 @@ pub fn run() {
             connect,
             disconnect,
             fetch_day,
+            fetch_month,
             fetch_prompt,
+            save_entries,
+            delete_entry,
+            start_day,
+            end_day,
             set_tooltip,
             snooze,
             wake

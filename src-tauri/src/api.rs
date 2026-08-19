@@ -88,6 +88,62 @@ pub struct Prompt {
     pub prompt: String,
 }
 
+/// A month of day tiles, for the history grid.
+///
+/// Deliberately not thirty ledgers: a tile carries four facts and a ledger
+/// carries fifty, and the grid exists to glance at a month and pick one day.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Month {
+    pub month: String,
+    pub label: String,
+    #[serde(default)]
+    pub context: String,
+    /// ISO weekday of the 1st, 1 = Monday, so the grid knows where to start.
+    #[serde(default = "one")]
+    pub first_weekday: u32,
+    #[serde(default)]
+    pub days: Vec<MonthDay>,
+}
+
+fn one() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonthDay {
+    pub date: String,
+    #[serde(default)]
+    pub has_target: bool,
+    #[serde(default)]
+    pub work_minutes: i64,
+    #[serde(default)]
+    pub entries: i64,
+    #[serde(default)]
+    pub accounted: bool,
+    #[serde(default)]
+    pub referenced: bool,
+    #[serde(default)]
+    pub is_today: bool,
+    #[serde(default)]
+    pub is_future: bool,
+}
+
+/// One entry on its way to Kaizen. `id` set is an edit, absent is a new row.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EntryDraft {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
+    pub from: String,
+    pub to: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+}
+
 /// Where each call goes. Kept in one place so a typo is a compile error rather
 /// than a 404 at runtime.
 pub fn url(server: &str, path: &str) -> String {
