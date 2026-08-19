@@ -62,6 +62,20 @@ fn main() {
                     &tokens.access_token[..24.min(tokens.access_token.len())]
                 );
                 println!("refresh token: {}", tokens.refresh_token.is_some());
+
+                // A token that cannot open the API it was minted for is not a
+                // working connection, only a working login.
+                let day: serde_json::Value = reqwest::blocking::Client::new()
+                    .get(kaizen_andon_lib::api::url(&server, "/day"))
+                    .bearer_auth(&tokens.access_token)
+                    .send()
+                    .expect("the day call")
+                    .json()
+                    .expect("the day parses");
+                println!(
+                    "GET /day:      {}",
+                    serde_json::to_string(&day).unwrap_or_default()
+                );
             }
             Ok(auth::Callback::Denied { error }) => println!("denied: {error}"),
             Err(e) => println!("no callback: {e}"),
