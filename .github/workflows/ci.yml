@@ -29,14 +29,41 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Formatting
+      # Every step runs even after one fails. Written from a machine with no
+      # Rust on it, so a run that stops at the first problem costs a whole
+      # round trip to learn the second.
+      - name: Build
+        id: build
+        if: always()
         working-directory: src-tauri
-        run: cargo fmt --check
+        run: cargo build --all-targets
+
+      - name: Tests
+        id: tests
+        if: always()
+        working-directory: src-tauri
+        run: cargo test
 
       - name: Clippy
+        id: clippy
+        if: always()
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Tests
+      - name: Formatting
+        id: fmt
+        if: always()
         working-directory: src-tauri
-        run: cargo test
+        run: cargo fmt --check
+
+      - name: Verdict
+        if: always()
+        shell: bash
+        run: |
+          fail=0
+          for step in "build ${{ steps.build.outcome }}" "tests ${{ steps.tests.outcome }}" \
+                      "clippy ${{ steps.clippy.outcome }}" "fmt ${{ steps.fmt.outcome }}"; do
+            echo "$step"
+            [[ "$step" == *failure ]] && fail=1
+          done
+          exit $fail

@@ -128,10 +128,9 @@ impl Ledger {
     /// it meant an hour earlier, which is exactly why the glyph changes too.
     pub fn headline(&self) -> (String, &'static str) {
         match self.phase {
-            Phase::Referencing if self.unreferenced_minutes > 0 => (
-                hhmm(self.unreferenced_minutes),
-                "not in the other system",
-            ),
+            Phase::Referencing if self.unreferenced_minutes > 0 => {
+                (hhmm(self.unreferenced_minutes), "not in the other system")
+            }
             _ if self.gap_minutes > 0 => (hhmm(self.gap_minutes), "unaccounted"),
             _ if self.started_at.is_none() => ("—:—".into(), "day not started"),
             _ => (hhmm(self.work_minutes), "accounted for"),

@@ -76,7 +76,9 @@ impl Config {
     }
 
     pub fn is_connected(&self) -> bool {
-        self.server_url.as_deref().is_some_and(|u| !u.trim().is_empty())
+        self.server_url
+            .as_deref()
+            .is_some_and(|u| !u.trim().is_empty())
     }
 }
 
@@ -91,7 +93,10 @@ mod tests {
 
     #[test]
     fn a_blank_url_does_not_count_as_connected() {
-        let config = Config { server_url: Some("   ".into()), ..Default::default() };
+        let config = Config {
+            server_url: Some("   ".into()),
+            ..Default::default()
+        };
         assert!(!config.is_connected());
     }
 
@@ -117,6 +122,9 @@ mod tests {
     fn a_mangled_file_reads_as_a_first_run() {
         let config: Config = serde_json::from_str("not json at all").unwrap_or_default();
 
-        assert!(!config.is_connected(), "never refuse to start over a bad config");
+        assert!(
+            !config.is_connected(),
+            "never refuse to start over a bad config"
+        );
     }
 }

@@ -34,7 +34,14 @@ fn place_window(window: WebviewWindow, expanded: bool) -> Result<(), String> {
             .current_monitor()
             .ok()
             .flatten()
-            .map(|m| (m.position().x, m.position().y, m.size().width as i32, m.size().height as i32))
+            .map(|m| {
+                (
+                    m.position().x,
+                    m.position().y,
+                    m.size().width as i32,
+                    m.size().height as i32,
+                )
+            })
             .unwrap_or((0, 0, 1920, 1080));
 
         placement::Rect {
@@ -86,7 +93,11 @@ fn save_config(app: AppHandle, config: state::Config) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![place_window, load_config, save_config])
+        .invoke_handler(tauri::generate_handler![
+            place_window,
+            load_config,
+            save_config
+        ])
         .setup(|app| {
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;

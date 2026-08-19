@@ -104,7 +104,12 @@ mod tests {
 
     fn full_hd() -> Rect {
         // 1920x1080 with a 48px taskbar already excluded.
-        Rect { left: 0, top: 0, right: 1920, bottom: 1032 }
+        Rect {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1032,
+        }
     }
 
     #[test]
@@ -121,22 +126,41 @@ mod tests {
         let (compact_x, _) = anchor(area, 292, 76, 1.0);
         let (wide_x, _) = anchor(area, 1222, 420, 1.0);
 
-        assert_eq!(compact_x + 292, wide_x + 1222, "the lamp must not move when it opens");
+        assert_eq!(
+            compact_x + 292,
+            wide_x + 1222,
+            "the lamp must not move when it opens"
+        );
     }
 
     #[test]
     fn the_width_is_capped_to_what_fits() {
-        let wide = Rect { left: 0, top: 0, right: 1920, bottom: 1032 };
+        let wide = Rect {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1032,
+        };
         assert_eq!(expanded_width(wide, 1.0), 1222);
 
         // A 1366x768 laptop cannot hold 1222 plus margins.
-        let laptop = Rect { left: 0, top: 0, right: 1366, bottom: 728 };
+        let laptop = Rect {
+            left: 0,
+            top: 0,
+            right: 1366,
+            bottom: 728,
+        };
         assert_eq!(expanded_width(laptop, 1.0), 1366 - 48);
     }
 
     #[test]
     fn the_margin_scales_with_dpi() {
-        let area = Rect { left: 0, top: 0, right: 2880, bottom: 1548 };
+        let area = Rect {
+            left: 0,
+            top: 0,
+            right: 2880,
+            bottom: 1548,
+        };
         let (x, y) = anchor(area, 438, 114, 1.5);
 
         assert_eq!(x, 2880 - 36 - 438);
@@ -145,7 +169,12 @@ mod tests {
 
     #[test]
     fn a_window_wider_than_the_screen_still_lands_on_it() {
-        let tiny = Rect { left: 0, top: 0, right: 400, bottom: 300 };
+        let tiny = Rect {
+            left: 0,
+            top: 0,
+            right: 400,
+            bottom: 300,
+        };
         let (x, y) = anchor(tiny, 1222, 420, 1.0);
 
         assert_eq!((x, y), (0, 0), "never position off the left or top edge");
