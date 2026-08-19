@@ -1,0 +1,50 @@
+name: release
+
+# Tagging v* builds the Windows installer, signs the update with the updater
+# key, and publishes latest.json beside it. That file is what the installed
+# app reads to know it is behind.
+#
+# TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD must exist
+# as repository secrets before the first tag. Without them the build still
+# produces an installer, but nothing can update itself, because the app
+# refuses any update it cannot verify. That refusal is the point: whoever can
+# serve a fake latest.json would otherwise be running code on the machine.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Kaizen Desktop ${{ github.ref_name }}
+          releaseBody: |
+            Download the installer below.
+
+            The app updates itself after this: it checks on launch and offers
+            when a newer build is out.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true

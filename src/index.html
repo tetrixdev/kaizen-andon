@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Kaizen</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- The ledger, above the bar. It grows upward out of it so the lamp never
+       moves when the card opens. -->
+  <div class="slab" id="slab" hidden>
+    <div class="slab-head">
+      <span class="slab-title" id="slabTitle">Today</span>
+      <span class="slab-hint" id="slabHint"></span>
+    </div>
+    <div class="etable" id="entries"></div>
+  </div>
+
+  <!-- The card. The whole thing is one button. -->
+  <div class="andon lit-wait" id="card" data-tauri-drag-region>
+    <div class="lamp" id="lamp">灯</div>
+    <div class="readout">
+      <div class="readout-top">
+        <span class="delta" id="delta">—:—</span>
+        <span class="delta-label" id="deltaLabel">not connected</span>
+      </div>
+      <div class="sub" id="sub">Point it at your Kaizen to begin</div>
+      <div class="track" id="track"></div>
+    </div>
+    <div class="actions" id="actions" hidden>
+      <button class="btn btn-seal" id="discuss">Discuss today with AI</button>
+    </div>
+  </div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>

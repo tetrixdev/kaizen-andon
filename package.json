@@ -1,0 +1,9 @@
+{
+  "name": "kaizen-andon",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kaizen Desktop: a lamp for time that is not accounted for yet",
+  "scripts": {
+    "tauri": "tauri"
+  }
+}

@@ -1,0 +1,256 @@
+/* Kaizen's own palette, from www/resources/css/app.css. The only addition is
+   the amber, and that is the andon board's own vocabulary: green running,
+   amber attention, red call. */
+:root {
+  --paper: #f7f4ee;
+  --paper-raised: #fffdf9;
+  --paper-sunk: #efe9df;
+  --ink: #1c1917;
+  --ink-soft: #57534e;
+  --ink-faint: #a8a29e;
+  --rule: #e2dbcf;
+
+  --moss: #5b7052;
+  --ochre: #b8823a;
+  --vermilion: #d9483b;
+  --indigo: #2e4a7d;
+
+  --serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  --sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --mono: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+}
+
+/* An always-on-top paper-white card is punishing at 23:00, and this is the one
+   part of Kaizen that never leaves the screen. So unlike the web app, it
+   follows the system theme. The lamp keeps its hue either way; only the ground
+   and the ink swap. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper-raised: #211d19;
+    --paper-sunk: #2a251f;
+    --rule: #3a332b;
+    --ink: #ece5da;
+    --ink-soft: #a79d90;
+    --ink-faint: #6d655b;
+    --vermilion: #ef7466;
+    --moss: #7f9673;
+    --ochre: #d3a05a;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  font-family: var(--sans);
+  color: var(--ink);
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+}
+
+body {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 0;
+  padding: 6px;
+}
+
+/* ── The card ───────────────────────────────────────────── */
+.andon {
+  --lamp: var(--moss);
+  --lamp-glow: transparent;
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  border-radius: 13px;
+  padding: 12px 14px;
+  display: flex;
+  gap: 13px;
+  align-items: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .1), 0 8px 22px -12px rgba(0, 0, 0, .4);
+  flex: none;
+}
+
+.andon:hover { border-color: color-mix(in srgb, var(--lamp) 45%, var(--rule)); }
+
+.lamp {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  font-family: var(--serif);
+  font-size: 23px;
+  line-height: 1;
+  color: var(--lamp);
+  background: radial-gradient(circle at 50% 50%, var(--lamp-glow) 0%, transparent 68%), var(--paper-sunk);
+  border: 1px solid var(--rule);
+}
+
+.readout { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.readout-top { display: flex; align-items: baseline; gap: 7px; }
+
+.delta {
+  font-family: var(--serif);
+  font-size: 25px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.delta-label { font-size: 11.5px; color: var(--ink-soft); }
+
+.sub {
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.actions { display: flex; gap: 8px; flex: none; }
+
+.lit-wait { --lamp: var(--ink-faint); --lamp-glow: transparent; }
+.lit-ok   { --lamp: var(--moss);      --lamp-glow: color-mix(in srgb, var(--moss) 18%, transparent); }
+.lit-warm { --lamp: var(--ochre);     --lamp-glow: color-mix(in srgb, var(--ochre) 28%, transparent); }
+.lit-call { --lamp: var(--vermilion); --lamp-glow: color-mix(in srgb, var(--vermilion) 34%, transparent); }
+.lit-off  { --lamp: var(--ink-faint); --lamp-glow: transparent; opacity: .62; }
+
+.lit-warm .delta, .lit-call .delta { color: var(--lamp); }
+.lit-wait .delta, .lit-off .delta { color: var(--ink-faint); }
+
+/* The only animation in the whole widget. A thing that moves in the corner of
+   your eye all day gets moved off the screen. */
+.lit-call { animation: breathe 3.6s ease-in-out infinite; }
+.lit-call .lamp { animation: lamp-breathe 3.6s ease-in-out infinite; }
+
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 1px 2px rgba(0,0,0,.1), 0 8px 22px -12px rgba(0,0,0,.4), 0 0 0 3px color-mix(in srgb, var(--vermilion) 20%, transparent); }
+  50%      { box-shadow: 0 1px 2px rgba(0,0,0,.1), 0 8px 26px -12px color-mix(in srgb, var(--vermilion) 50%, transparent), 0 0 0 9px color-mix(in srgb, var(--vermilion) 5%, transparent); }
+}
+
+@keyframes lamp-breathe {
+  0%, 100% { background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--vermilion) 20%, transparent) 0%, transparent 68%), var(--paper-sunk); }
+  50%      { background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--vermilion) 55%, transparent) 0%, transparent 74%), var(--paper-sunk); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lit-call, .lit-call .lamp { animation: none; }
+  .lit-call { box-shadow: 0 1px 2px rgba(0,0,0,.1), 0 8px 22px -12px rgba(0,0,0,.4), 0 0 0 3px color-mix(in srgb, var(--vermilion) 22%, transparent); }
+}
+
+/* ── The strip ──────────────────────────────────────────── */
+/* An hour is a block, an entry is a bar at its real position and length, so a
+   two-hour session reads as one long bar. Empty space is never a separator:
+   a hole in the bar already means unaccounted. */
+.track {
+  position: relative;
+  height: 9px;
+  margin-top: 4px;
+  border-radius: 3px;
+  background: var(--paper-sunk);
+  overflow: hidden;
+}
+
+.seg { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
+.seg.work { background: var(--ink); opacity: .82; }
+.seg.work.alt { opacity: .56; }
+.seg.rest {
+  background: repeating-linear-gradient(-45deg,
+    color-mix(in srgb, var(--indigo) 45%, transparent) 0 2px, transparent 2px 6px);
+  border: 1px solid color-mix(in srgb, var(--indigo) 30%, transparent);
+}
+.seg.gap {
+  background: color-mix(in srgb, var(--lamp) 10%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--lamp) 62%, transparent);
+}
+.seg.dead { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+
+/* In the second phase the question is no longer where the day went but whether
+   it left the building, so the alternation stops and unreferenced work hollows
+   out instead. */
+.phase-referencing .seg.work { opacity: .78; }
+.phase-referencing .seg.work.alt { opacity: .78; }
+.phase-referencing .seg.work.unref {
+  background: color-mix(in srgb, var(--vermilion) 10%, transparent);
+  border: 1.5px dashed var(--vermilion);
+  opacity: 1;
+}
+
+.now {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--vermilion);
+}
+
+/* ── The ledger ─────────────────────────────────────────── */
+.slab {
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  border-bottom: 0;
+  border-radius: 13px 13px 0 0;
+  padding: 12px 14px;
+  margin-bottom: -1px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .1), 0 8px 22px -12px rgba(0, 0, 0, .4);
+}
+
+.slab-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+.slab-title { font-size: 10.5px; letter-spacing: .13em; text-transform: uppercase; color: var(--ink-faint); font-weight: 600; }
+.slab-hint { font-size: 11px; color: var(--ink-faint); }
+
+.etable { display: flex; flex-direction: column; }
+
+.erow {
+  display: grid;
+  grid-template-columns: 104px 52px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 6px;
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+.erow + .erow { border-top: 1px dashed var(--rule); }
+.erow:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.erow.gap-row { background: color-mix(in srgb, var(--vermilion) 6%, transparent); }
+
+.e-time { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.e-dur { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.e-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.erow.rest-row .e-what { color: var(--ink-soft); font-style: italic; }
+.erow.gap-row .e-what { color: var(--vermilion); }
+
+.pill { font-size: 10px; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
+.pill.ok { background: color-mix(in srgb, var(--moss) 18%, transparent); color: var(--moss); }
+.pill.pending { background: color-mix(in srgb, var(--ochre) 22%, transparent); color: var(--ochre); }
+.pill.open { background: color-mix(in srgb, var(--vermilion) 14%, transparent); color: var(--vermilion); }
+
+/* ── Controls ───────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-seal { background: var(--vermilion); color: #fff; }
+.btn-ghost { background: transparent; border-color: var(--rule); color: var(--ink-soft); }
+.btn:hover { filter: brightness(.95); }
