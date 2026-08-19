@@ -344,6 +344,53 @@ fn end_day(
     })
 }
 
+/// What the tray icon says on hover. The card may be hidden or snoozed; the
+/// tray is the one surface that is always there, so it carries the number.
+#[tauri::command]
+fn set_tooltip(app: AppHandle, text: String) -> Result<(), String> {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        tray.set_tooltip(Some(&text)).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// Put the lamp down until it has something else to say.
+///
+/// Only from Running: from Attention up there is no hiding, which is the rule
+/// that makes the end of the day always show.
+#[tauri::command]
+fn snooze(app: AppHandle, state: String, today: String) -> Result<(), String> {
+    if state != "running" {
+        return Err("only a quiet lamp can be put down".into());
+    }
+
+    let mut config = state::Config::load(&app).map_err(|e| e.to_string())?;
+    config.snoozed_at_state = Some(state);
+    config.snoozed_on = Some(today);
+    config.save(&app).map_err(|e| e.to_string())?;
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn wake(app: AppHandle) -> Result<(), String> {
+    let mut config = state::Config::load(&app).map_err(|e| e.to_string())?;
+    config.snoozed_at_state = None;
+    config.snoozed_on = None;
+    config.save(&app).map_err(|e| e.to_string())?;
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+    }
+
+    Ok(())
+}
+
 /// The clipboard text: the day as it stands, its holes, and the user's own
 /// instructions verbatim.
 #[tauri::command(async)]
