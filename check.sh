@@ -15,7 +15,7 @@
 # rather than taking the machine to 100%, which has happened twice.
 set -uo pipefail
 
-FLOOR_GB=2
+FLOOR_GB=3
 cd "$(dirname "$0")"
 
 free_gb() { df --output=avail -BG / | tail -1 | tr -dc '0-9'; }
@@ -50,10 +50,16 @@ run() {
 }
 
 fail=0
-for check in "check:cargo check --all-targets" \
-             "tests:cargo test" \
-             "clippy:cargo clippy --all-targets -- -D warnings" \
-             "fmt:cargo fmt --check"; do
+# clippy type-checks on its way to linting, so a separate `cargo check` only
+# buys a duplicate set of artifacts in the target directory. On a machine this
+# tight that is a few hundred megabytes for nothing.
+# Formatting is applied rather than merely reported: rustfmt's opinion is not
+# worth a round trip, and CI still checks it so nothing drifts.
+printf '\n=== fmt ===\n'
+run cargo fmt
+
+for check in "clippy:cargo clippy --all-targets -- -D warnings" \
+             "tests:cargo test"; do
     name="${check%%:*}"
     printf '\n=== %s ===\n' "$name"
     # shellcheck disable=SC2086
