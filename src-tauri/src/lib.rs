@@ -4,6 +4,7 @@
 //! process holds almost no logic. What it owns is where the window sits, when
 //! it is open, and which build is installed.
 
+pub mod auth;
 pub mod ledger;
 pub mod placement;
 pub mod state;

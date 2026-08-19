@@ -19,6 +19,8 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+getrandom = "0.3"
 
 # SPI_GETWORKAREA. The taskbar's height is not a constant: it changes with DPI
 # and the small-buttons setting, it can sit on any edge, and it can auto-hide.
