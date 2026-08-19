@@ -50,6 +50,7 @@ const popActions = document.getElementById('popActions');
 const addBtn = document.getElementById('addBtn');
 const historyBtn = document.getElementById('historyBtn');
 const startBtn = document.getElementById('startBtn');
+const endBtn = document.getElementById('endBtn');
 
 const STATE_CLASSES = ['lit-wait', 'lit-ok', 'lit-warm', 'lit-call', 'lit-off'];
 const LAMP_FOR = { waiting: 'lit-wait', running: 'lit-ok', attention: 'lit-warm', call: 'lit-call', quiet: 'lit-off' };
@@ -214,6 +215,13 @@ function render(l) {
   // A day that never started can hold nothing, so that is the only thing
   // worth offering until it has.
   startBtn.hidden = !!l.started_at;
+
+  // Calling it a day closes the accounting question whatever the total. A day
+  // ended short is complete by decision, not a failure, which is the ordinary
+  // case of working two hours less today and ten tomorrow.
+  endBtn.hidden = !l.started_at;
+  endBtn.textContent = l.ended_at ? 'Reopen the day' : 'Call it a day';
+  endBtn.dataset.reopen = l.ended_at ? 'yes' : '';
 
   // The button carries the date, because on a past day it is a different
   // conversation and a prompt about "today" would be the wrong one.
@@ -744,6 +752,19 @@ addBtn.addEventListener('click', (event) => {
   event.stopPropagation();
   // The first open hole is almost always the one meant.
   openEditor({ gap: (ledger?.gaps ?? [])[0] ?? null });
+});
+
+endBtn.addEventListener('click', async (event) => {
+  event.stopPropagation();
+  try {
+    apply(await invoke('end_day', {
+      at: null,
+      reopen: endBtn.dataset.reopen === 'yes',
+      date: viewDate,
+    }));
+  } catch (e) {
+    sub.textContent = String(e).replace(/^Error:\s*/, '');
+  }
 });
 
 startBtn.addEventListener('click', async (event) => {

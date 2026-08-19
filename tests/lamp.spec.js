@@ -89,6 +89,7 @@ const MONTH = {
 const bridge = (config, day, connectError) => `
   window.__calls = [];
   window.__month = ${JSON.stringify(MONTH)};
+  window.__baseLedger = ${JSON.stringify((day.ledgers || [])[0] || null)};
   window.__TAURI__ = {
     core: {
       invoke: async (cmd, args) => {
@@ -399,4 +400,50 @@ test('quick actions fill the span without typing', async ({ page }) => {
 
   await page.getByRole('button', { name: '30m' }).click();
   await expect(page.locator('#editTo')).toHaveValue('13:30');
+});
+
+test('a day can be called and reopened from the widget', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+
+  await expect(page.locator('#startBtn')).toBeHidden();
+  await expect(page.locator('#endBtn')).toHaveText('Call it a day');
+
+  // Kaizen answers a write with the new day, so the button turns around.
+  await page.evaluate(() => {
+    window.__after = { local_time: '17:30', ledgers: [{ ...window.__baseLedger, ended_at: '17:30' }] };
+  });
+  await page.locator('#endBtn').click();
+  await expect(page.locator('#endBtn')).toHaveText('Reopen the day');
+
+  const sent = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'end_day').pop()[1]);
+  expect(sent.reopen).toBe(false);
+});
+
+test('the bar still holds together on a narrow screen', async ({ page }) => {
+  // The expanded width is min(1222, work area - 48), so a 1024 laptop gets
+  // 976 and the actions row has to survive it. The row has grown twice now.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  await page.locator('#card').click({ position: { x: 140, y: 40 } });
+  const asked = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'place_window').pop()[1]);
+  await page.setViewportSize({ width: 976, height: asked.height });
+  await page.waitForTimeout(120);
+
+  await assertNothingClipped(page, 'narrow-expanded');
+
+  // The readout must not be crushed to nothing by the buttons beside it.
+  const readout = await page.evaluate(() =>
+    document.querySelector('.readout').getBoundingClientRect().width);
+  expect(readout, 'the number is the point; it cannot be squeezed out').toBeGreaterThan(220);
+
+  await page.screenshot({ path: 'state-narrow.png' });
 });
