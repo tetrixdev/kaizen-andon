@@ -1,0 +1,20 @@
+# The Rust toolchain lives in a container, not on the host: this box is tight
+# on disk and a rustup install plus a target directory is not something to
+# leave lying around. `docker image rm kaizen-andon-dev` undoes all of it.
+#
+# Tauri needs GTK and WebKit headers even to type-check on Linux, because the
+# tauri crate compiles against them.
+FROM rust:1-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libwebkit2gtk-4.1-dev \
+        libgtk-3-dev \
+        libayatana-appindicator3-dev \
+        librsvg2-dev \
+        libssl-dev \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN rustup component add rustfmt clippy
+
+WORKDIR /app/src-tauri

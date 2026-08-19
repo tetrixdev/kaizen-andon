@@ -40,6 +40,19 @@ store.
 The smooth path is the **Connect** button in Kaizen's own settings, which hands
 the address over via a `kaizen-andon://` link so there is nothing to type.
 
+## Traps
+
+**Icons must be RGBA.** `tauri::generate_context!` panics at compile time on an
+RGB PNG with `icon ... is not RGBA`, and it does so only where the PNGs are
+read: a Windows build validates the `.ico` and sails past it, so CI can be
+green while a Linux check fails. Generate with an alpha channel.
+
+**Check, do not build, when disk is short.** A full Tauri debug build lands at
+4-6GB of target directory, larger than the 3.2GB dev image itself. `cargo
+check` with `CARGO_PROFILE_DEV_DEBUG=0` brings that to about 1.5GB. `docker
+builder prune` afterwards matters too: the build cache holds a full duplicate
+of the image layers.
+
 ## Building
 
 ```
