@@ -41,7 +41,7 @@ impl Config {
         let dir = app
             .path()
             .app_config_dir()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
 
         fs::create_dir_all(&dir)?;
 
@@ -67,7 +67,7 @@ impl Config {
         let tmp = path.with_extension("json.tmp");
 
         let body = serde_json::to_string_pretty(self)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         fs::write(&tmp, body)?;
         fs::rename(&tmp, &path)?;

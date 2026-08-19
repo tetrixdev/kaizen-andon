@@ -143,14 +143,23 @@ mod tests {
         };
         assert_eq!(expanded_width(wide, 1.0), 1222);
 
-        // A 1366x768 laptop cannot hold 1222 plus margins.
+        // 1222 plus two margins is 1270, so a 1366 laptop still takes the full
+        // width. The cap only bites below that.
         let laptop = Rect {
             left: 0,
             top: 0,
             right: 1366,
             bottom: 728,
         };
-        assert_eq!(expanded_width(laptop, 1.0), 1366 - 48);
+        assert_eq!(expanded_width(laptop, 1.0), 1222);
+
+        let narrow = Rect {
+            left: 0,
+            top: 0,
+            right: 1024,
+            bottom: 728,
+        };
+        assert_eq!(expanded_width(narrow, 1.0), 1024 - 48);
     }
 
     #[test]
