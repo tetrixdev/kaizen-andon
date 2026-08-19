@@ -110,9 +110,26 @@ pub use platform::{clear, load, save};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// The store is one place, not one per test: on Windows it is a single
+    /// Credential Manager entry for the whole machine, and here it is a single
+    /// process-wide cell. Cargo runs tests on parallel threads, so without
+    /// this the round-trip test's `save` lands between the first-run test's
+    /// `clear` and its `load` and the first-run test fails on a token it never
+    /// wrote. That is a race, so it fails on some runs and not others.
+    static STORE: Mutex<()> = Mutex::new(());
+
+    /// A failing test leaves the lock poisoned, which would turn one real
+    /// failure into every other test failing too and bury the cause.
+    fn exclusive() -> std::sync::MutexGuard<'static, ()> {
+        STORE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     #[test]
     fn nothing_stored_reads_as_a_first_run() {
+        let _guard = exclusive();
+
         clear().expect("clears");
         let tokens = load().expect("loads");
 
@@ -124,6 +141,8 @@ mod tests {
 
     #[test]
     fn a_token_round_trips_and_can_be_cleared() {
+        let _guard = exclusive();
+
         let stored = Tokens {
             access_token: Some("eyJ0eXAi".into()),
             refresh_token: Some("def502".into()),
