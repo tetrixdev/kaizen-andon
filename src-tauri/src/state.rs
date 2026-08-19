@@ -34,6 +34,12 @@ pub struct Config {
 
     #[serde(default)]
     pub expanded: bool,
+
+    /// The client this install registered as. Not a secret: Kaizen issues
+    /// public clients, because a binary on the user's machine can always be
+    /// read and a secret in it would be a secret in name only.
+    #[serde(default)]
+    pub client_id: Option<String>,
 }
 
 impl Config {
@@ -79,6 +85,78 @@ impl Config {
         self.server_url
             .as_deref()
             .is_some_and(|u| !u.trim().is_empty())
+            && self.client_id.is_some()
+    }
+}
+
+/// Where the tokens live.
+///
+/// Separate from Config on purpose: the config is ordinary settings anyone may
+/// read, the tokens are the thing that would let somebody act as the user.
+/// They go to a file the owner alone can read, and on Windows that is under
+/// %APPDATA%, which is already user-scoped.
+///
+/// DEFERRED: the Windows Credential Manager is the right home, and the shape
+/// here is a straight swap when that lands. It is worth being plain about the
+/// gap rather than implying more protection than exists: DPAPI unlocks for the
+/// same user anyway, so the practical difference is against another account on
+/// the machine, not against anything running as this one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Secrets {
+    #[serde(default)]
+    pub access_token: Option<String>,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+}
+
+impl Secrets {
+    fn path(app: &AppHandle) -> io::Result<PathBuf> {
+        let dir = app
+            .path()
+            .app_config_dir()
+            .map_err(|e| io::Error::other(e.to_string()))?;
+
+        fs::create_dir_all(&dir)?;
+
+        Ok(dir.join("tokens.json"))
+    }
+
+    pub fn load(app: &AppHandle) -> io::Result<Self> {
+        match fs::read_to_string(Self::path(app)?) {
+            Ok(raw) => Ok(serde_json::from_str(&raw).unwrap_or_default()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn save(&self, app: &AppHandle) -> io::Result<()> {
+        let path = Self::path(app)?;
+        let tmp = path.with_extension("json.tmp");
+
+        fs::write(
+            &tmp,
+            serde_json::to_string(self).map_err(|e| io::Error::other(e.to_string()))?,
+        )?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+        }
+
+        fs::rename(&tmp, &path)
+    }
+
+    pub fn clear(app: &AppHandle) -> io::Result<()> {
+        match fs::remove_file(Self::path(app)?) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn has_token(&self) -> bool {
+        self.access_token.as_deref().is_some_and(|t| !t.is_empty())
     }
 }
 
@@ -101,21 +179,55 @@ mod tests {
     }
 
     #[test]
-    fn a_real_url_does() {
+    fn a_url_without_a_client_is_not_yet_connected() {
         let config = Config {
             server_url: Some("https://kaizen.tetrix.dev".into()),
+            ..Default::default()
+        };
+        assert!(
+            !config.is_connected(),
+            "an address alone is an intention, not a connection"
+        );
+    }
+
+    #[test]
+    fn a_url_and_a_client_is_connected() {
+        let config = Config {
+            server_url: Some("https://kaizen.tetrix.dev".into()),
+            client_id: Some("01a01b20-c1bb-72bd-8484-711e07c45fe5".into()),
             ..Default::default()
         };
         assert!(config.is_connected());
     }
 
     #[test]
+    fn secrets_start_empty_and_report_it() {
+        let secrets = Secrets::default();
+        assert!(!secrets.has_token());
+
+        let secrets = Secrets {
+            access_token: Some(String::new()),
+            refresh_token: None,
+        };
+        assert!(!secrets.has_token(), "an empty string is not a token");
+
+        let secrets = Secrets {
+            access_token: Some("eyJ0eXAi".into()),
+            refresh_token: Some("def502".into()),
+        };
+        assert!(secrets.has_token());
+    }
+
+    #[test]
     fn unknown_fields_do_not_break_an_older_build() {
-        // A newer Kaizen may hand back more than this build knows about.
-        let raw = r#"{"server_url": "https://x", "something_new": 42}"#;
+        // A newer build may write more than this one knows about, and the
+        // older one still has to start. What matters is that the fields it
+        // does understand survive, not that the file describes a connection.
+        let raw = r#"{"server_url": "https://x", "client_id": "c1", "something_new": 42}"#;
         let config: Config = serde_json::from_str(raw).unwrap();
 
-        assert!(config.is_connected());
+        assert_eq!(config.server_url.as_deref(), Some("https://x"));
+        assert_eq!(config.client_id.as_deref(), Some("c1"));
     }
 
     #[test]
