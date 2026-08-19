@@ -88,6 +88,13 @@ public half is in `tauri.conf.json`; the private half exists only as the
 anywhere else. It carries no passphrase, which is why the release workflow
 passes an empty password rather than reading a second secret.
 
+`bundle.createUpdaterArtifacts` is what makes the build emit the signed `.sig`
+beside the installer. Tauri v2 makes it opt-in, and without it the release
+still publishes a perfectly good installer, just with no `latest.json` beside
+it, so every copy sits on the version it was installed at and never says so.
+The build does not warn; the only symptom is a release with one asset instead
+of three.
+
 Regenerating the pair is a breaking act: every installed copy verifies against
 the public key it was built with, so a new key means everyone reinstalls by
 hand. Generate a replacement only if the old one leaks.
