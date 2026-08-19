@@ -320,3 +320,204 @@ body {
 .setup-note { margin: 0; font-size: 11px; color: var(--ink-faint); line-height: 1.5; }
 
 .btn:disabled { opacity: .6; cursor: default; }
+
+/* ── Panels above the bar ────────────────────────────────
+   The editor and the history grid share the slab's shape: they replace it
+   rather than sitting beside it, because closed the window is 292 wide and
+   there is no room for two of anything. */
+.editor, .history, .banner {
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  border-bottom: 0;
+  border-radius: 13px 13px 0 0;
+  padding: 12px 14px 14px;
+  flex: none;
+}
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.panel-title {
+  font-size: 10.5px;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  font-weight: 600;
+}
+
+.panel-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.panel-note { font-size: 11px; color: var(--ink-faint); line-height: 1.5; margin: 0; }
+.panel-note.bad { color: var(--vermilion); }
+
+/* ── The editor ──────────────────────────────────────── */
+.editor-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px 10px;
+}
+
+.fld { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.fld-wide { grid-column: span 2; }
+.fld-label { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint); font-weight: 600; }
+
+/* A context that does not log anywhere else has no second job, so the boxes
+   for it do not exist rather than sitting there greyed out. */
+.editor:not(.external) .ext { display: none; }
+
+.quick { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; min-height: 32px; }
+
+.chip {
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.chip:hover { border-color: var(--ink-faint); color: var(--ink); }
+
+.toggle { display: flex; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; height: 32px; }
+.toggle-btn {
+  font: inherit;
+  font-size: 12px;
+  flex: 1;
+  border: 0;
+  background: var(--paper);
+  color: var(--ink-soft);
+  cursor: pointer;
+  padding: 0 10px;
+}
+.toggle-btn.on { background: var(--ink); color: var(--paper-raised); }
+
+/* ── History ─────────────────────────────────────────── */
+.month-nav { display: flex; align-items: center; gap: 6px; }
+
+.weekdays, .month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 32px);
+  gap: 6px;
+  justify-content: center;
+}
+
+.weekdays {
+  margin-bottom: 5px;
+  font-size: 9.5px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.weekdays span { text-align: center; }
+
+/* The day tile, matching Kaizen's own: dashed when the day holds nothing,
+   solid when it does, vermilion for today. */
+.tile {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px dashed var(--rule);
+  background: transparent;
+  color: var(--ink-faint);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tile.blank { border: 0; cursor: default; }
+.tile.held { border-style: solid; border-color: var(--rule); background: var(--paper-sunk); color: var(--ink); }
+.tile.done { background: var(--ink); border-color: var(--ink); color: var(--paper-raised); }
+.tile.today { border-color: var(--vermilion); border-style: solid; }
+/* No target is no judgement: a weekend is not a day you failed to fill. */
+.tile.untargeted { opacity: .45; }
+.tile.future { opacity: .3; cursor: default; }
+.tile:not(.blank):not(.future):hover { border-color: var(--indigo); }
+
+/* The seal: accounted for AND in the other system reads full; accounted for
+   with nothing referenced reads dashed, the same two-ink honesty the web app
+   uses for a partial reflection. */
+.tile .seal {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--paper-raised);
+  border: 1px solid var(--ink);
+  font-family: var(--serif);
+  font-size: 8px;
+  line-height: 12px;
+  text-align: center;
+  color: var(--ink);
+}
+.tile .seal.partial { border-style: dashed; color: var(--ink-faint); border-color: var(--ink-faint); }
+
+/* ── Looking back ────────────────────────────────────── */
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 14px;
+  border-color: var(--indigo);
+  background: color-mix(in srgb, var(--indigo) 7%, var(--paper-raised));
+}
+.banner-text { font-size: 12px; color: var(--indigo); font-weight: 600; }
+
+/* Indigo is already this app's colour for looking back, so a finished day can
+   never be mistaken for the live one at a glance. */
+.past .andon, .past.andon { border-color: var(--indigo); }
+.past .lamp, .past.andon .lamp { color: var(--indigo); }
+.past .delta, .past.andon .delta { color: var(--indigo); }
+.past .now { display: none; }
+
+/* ── Segment detail ──────────────────────────────────── */
+.pop {
+  position: fixed;
+  z-index: 20;
+  min-width: 190px;
+  max-width: 320px;
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 9px 11px;
+  box-shadow: 0 10px 30px -14px rgba(0, 0, 0, .5);
+  font-size: 12px;
+}
+.pop.pinned { border-color: var(--ink-faint); }
+.pop-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.pop-title { font-weight: 600; }
+.pop-span { font-size: 11px; color: var(--ink-faint); }
+.pop-body { color: var(--ink-soft); line-height: 1.5; }
+.pop-actions { display: flex; gap: 6px; margin-top: 9px; }
+
+/* Middle truncation, keeping the end: a trailing ellipsis eats the reference
+   id, which is the only part that differs between two links. */
+.pop-link { display: block; margin-top: 4px; color: var(--indigo); text-decoration: none; word-break: break-all; }
+.pop:not(.pinned) .pop-link { color: var(--ink-faint); pointer-events: none; }
+
+.seg.pinned { outline: 2px solid var(--ink); outline-offset: 1px; }
+
+.history-body { display: flex; gap: 28px; align-items: flex-start; }
+.calendar { flex: none; }
+.month-summary { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; padding-top: 2px; }
+.sum-row { display: flex; align-items: baseline; gap: 9px; font-size: 12px; color: var(--ink-soft); }
+.sum-figure { font-family: var(--serif); font-size: 19px; color: var(--ink); min-width: 46px; font-variant-numeric: tabular-nums; }
+.sum-row.faint { color: var(--ink-faint); }
+.sum-row.faint .sum-figure { color: var(--ink-faint); }

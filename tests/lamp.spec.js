@@ -14,6 +14,7 @@
 // The Tauri bridge is stubbed and every value is invented; nothing here talks
 // to a real Kaizen.
 // The frontend's own tests. CI compiles Rust and never loads this page.
+// The frontend's own tests. CI compiles Rust and never loads this page.
 //
 // The point of this file is that no state is special. Every screen goes
 // through the same two checks: the window size it asks for SETTLES (it does
@@ -43,8 +44,11 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await new Promise((done) => server.close(done)); });
 
+let nextId = 1;
 const entry = (from, to, minutes, description, referenced) =>
-  ({ from, to, kind: 'work', minutes, description, referenced, reference: referenced ? 'REF-1042' : null });
+  ({ id: nextId++, from, to, kind: 'work', minutes, description, referenced,
+     reference: referenced ? 'REF-1042' : null,
+     link: referenced ? 'https://external.example.com/app/entries/REF-1042' : null });
 
 const LEDGER = (over = {}) => ({
   context: 'Work', date: '2026-08-19', state: 'attention', phase: 'accounting',
@@ -52,7 +56,7 @@ const LEDGER = (over = {}) => ({
   target_minutes: 480, work_minutes: 331, gap_minutes: 95, unreferenced_minutes: 120,
   entries: [
     entry('08:34', '10:15', 101, 'Ticket triage', true),
-    { from: '10:15', to: '10:30', kind: 'rest', minutes: 15, description: 'Coffee' },
+    { id: 900, from: '10:15', to: '10:30', kind: 'rest', minutes: 15, description: 'Coffee' },
     entry('10:30', '12:30', 120, 'Migration work', false),
     entry('14:35', '16:25', 110, 'Review', true),
   ],
@@ -67,16 +71,40 @@ const LONG = LEDGER({
       `A description long enough to be realistic, number ${i + 1}`, i % 2 === 0)),
 });
 
+const MONTH = {
+  month: '2026-08', label: 'August 2026', context: 'Work', first_weekday: 6,
+  days: Array.from({ length: 31 }, (_, i) => {
+    const date = `2026-08-${String(i + 1).padStart(2, '0')}`;
+    const weekday = new Date(2026, 7, i + 1).getDay();
+    const workday = weekday !== 0 && weekday !== 6;
+    return {
+      date, has_target: workday, target_minutes: workday ? 480 : null,
+      work_minutes: workday && i < 18 ? 480 : 0, entries: workday && i < 18 ? 3 : 0,
+      accounted: workday && i < 18, referenced: workday && i < 10,
+      is_today: i + 1 === 19, is_future: i + 1 > 19,
+    };
+  }),
+};
+
 const bridge = (config, day, connectError) => `
   window.__calls = [];
+  window.__month = ${JSON.stringify(MONTH)};
   window.__TAURI__ = {
     core: {
       invoke: async (cmd, args) => {
         window.__calls.push([cmd, args]);
         if (cmd === 'load_config') return ${JSON.stringify(config)};
-        if (cmd === 'fetch_day') return ${JSON.stringify(day)};
+        if (cmd === 'fetch_day') return { local_time: '14:20', ...${JSON.stringify(day)} };
         if (cmd === 'fetch_prompt') return { prompt: 'x', bootstrap: false };
         if (cmd === 'connect' && ${JSON.stringify(connectError)}) throw new Error(${JSON.stringify(connectError)});
+        if (cmd === 'fetch_month') return window.__month;
+        if (cmd === 'save_entries') {
+          if (window.__refuse) throw new Error(window.__refuse);
+          return window.__after || ${JSON.stringify(day)};
+        }
+        if (cmd === 'delete_entry' || cmd === 'start_day' || cmd === 'end_day') {
+          return window.__after || ${JSON.stringify(day)};
+        }
         return null;
       },
     },
@@ -117,6 +145,12 @@ async function settle(page) {
   }
 
   throw new Error(`window size never settled, last was ${JSON.stringify(last)}`);
+}
+
+/** Open the card the way the app does: click, then let the window catch up. */
+async function open(page) {
+  await page.locator('#card').click({ position: { x: 140, y: 40 } });
+  await settle(page);
 }
 
 /** Nothing visible may sit outside the window. */
@@ -170,6 +204,46 @@ const STATES = [
     day: { ledgers: [LEDGER({ started_at: null, gap_minutes: 0, work_minutes: 0 })] } },
   { name: 'expanded', config: CONNECTED, day: { ledgers: [LEDGER()] },
     async act(page) { await page.locator('#card').click({ position: { x: 140, y: 40 } }); } },
+  { name: 'editor-from-a-gap', config: CONNECTED, day: { ledgers: [LEDGER()] },
+    async act(page) {
+      await open(page);
+      await page.locator('#track .seg.gap').first().click();
+      await expect(page.locator('#editor')).toBeVisible();
+    } },
+  { name: 'editor-refused', config: CONNECTED, day: { ledgers: [LEDGER()] },
+    async act(page) {
+      await page.evaluate(() => { window.__refuse = '13:00-14:35 overlaps an entry already filed.'; });
+      await open(page);
+      await page.locator('#track .seg.gap').first().click();
+      await page.locator('#editorSave').click();
+      await expect(page.locator('#editorNote')).toContainText('overlaps');
+    } },
+  { name: 'pinned-popover', config: CONNECTED, day: { ledgers: [LEDGER()] },
+    async act(page) {
+      await open(page);
+      await page.locator('#track .seg.work').first().click();
+      await expect(page.locator('#pop')).toBeVisible();
+      await expect(page.locator('#popActions')).toBeVisible();
+    } },
+  { name: 'history-grid', config: CONNECTED, day: { ledgers: [LEDGER()] },
+    async act(page) {
+      await open(page);
+      await page.locator('#historyBtn').click();
+      await expect(page.locator('#monthGrid .tile[data-date]')).toHaveCount(31);
+    } },
+  { name: 'looking-back', config: CONNECTED, day: { ledgers: [LEDGER()] },
+    async act(page) {
+      await open(page);
+      await page.locator('#historyBtn').click();
+      await page.locator('.tile[data-date="2026-08-14"]').click();
+      await expect(page.locator('#banner')).toBeVisible();
+    } },
+  { name: 'day-not-started', config: CONNECTED,
+    day: { ledgers: [LEDGER({ started_at: null, entries: [], gaps: [], work_minutes: 0, gap_minutes: 0, state: 'waiting' })] },
+    async act(page) {
+      await open(page);
+      await expect(page.locator('#startBtn')).toBeVisible();
+    } },
   { name: 'expanded-long-day', config: CONNECTED, day: { ledgers: [LONG] },
     async act(page) { await page.locator('#card').click({ position: { x: 140, y: 40 } }); } },
 ];
@@ -195,3 +269,134 @@ for (const state of STATES) {
     await page.screenshot({ path: `state-${state.name}.png` });
   });
 }
+
+test('a past day stops polling and drops the now line', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  await open(page);
+  await page.locator('#historyBtn').click();
+  await page.locator('.tile[data-date="2026-08-14"]').click();
+  await expect(page.locator('#banner')).toBeVisible();
+
+  // The button carries the date, because on a past day it is a different
+  // conversation from the one about today.
+  await expect(page.locator('#discuss')).toContainText('Aug');
+  await expect(page.locator('#track .now')).toHaveCount(0);
+  await expect(page.locator('#snoozeBtn')).toBeHidden();
+
+  const before = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'fetch_day').length);
+  await page.waitForTimeout(1200);
+  const after = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'fetch_day').length);
+  expect(after, 'a finished day cannot change, so it must not be re-asked').toBe(before);
+
+  await page.locator('#backToToday').click();
+  await expect(page.locator('#banner')).toBeHidden();
+  await expect(page.locator('#discuss')).toContainText('today');
+});
+
+test('clicking a gap fills the span in rather than asking for it', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  await open(page);
+  await page.locator('#track .seg.gap').first().click();
+
+  await expect(page.locator('#editFrom')).toHaveValue('13:00');
+  await expect(page.locator('#editTo')).toHaveValue('14:35');
+
+  await page.locator('#editWhat').fill('Migration work');
+  await page.locator('#editorSave').click();
+
+  const sent = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'save_entries').pop()[1]);
+  expect(sent.entries).toHaveLength(1);
+  expect(sent.entries[0]).toMatchObject({ from: '13:00', to: '14:35', kind: 'work' });
+  await expect(page.locator('#editor')).toBeHidden();
+});
+
+test('splitting files the shortened entry and its second half together', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  await open(page);
+  await page.locator('#track .seg.work').first().click();
+  await page.locator('#popSplit').click();
+  await page.locator('#editorSave').click();
+
+  const sent = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'save_entries').pop()[1]);
+  expect(sent.entries, 'both halves go in one decision').toHaveLength(2);
+  expect(sent.entries[0].id, 'the first half edits the original').toBeTruthy();
+  expect(sent.entries[1].id, 'the second half is a new row').toBeFalsy();
+  expect(sent.entries[0].to).toBe(sent.entries[1].from);
+});
+
+test('a personal context is never asked for a reference', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED,
+    { ledgers: [LEDGER({ logs_externally: false })] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  await open(page);
+  await page.locator('#addBtn').click();
+  await expect(page.locator('#editor')).toBeVisible();
+  await expect(page.locator('#editRef')).toBeHidden();
+  await expect(page.locator('#editLink')).toBeHidden();
+});
+
+test('the grid seals a referenced day differently from an unreferenced one', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  await open(page);
+  await page.locator('#historyBtn').click();
+
+  // 6 Aug is accounted for and referenced; 17 Aug is accounted for only.
+  await expect(page.locator('.tile[data-date="2026-08-06"] .seal')).not.toHaveClass(/partial/);
+  await expect(page.locator('.tile[data-date="2026-08-17"] .seal')).toHaveClass(/partial/);
+  // A Saturday carries no target, so it carries no judgement either.
+  await expect(page.locator('.tile[data-date="2026-08-15"] .seal')).toHaveCount(0);
+});
+
+test('the month says what it adds up to, counting only claimed days', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  await open(page);
+  await page.locator('#historyBtn').click();
+  await expect(page.locator('#monthSummary .sum-row').first()).toBeVisible();
+
+  // 1 to 19 August holds 13 working days, 12 of them accounted for; weekends
+  // carry no target and must not count against the month.
+  await expect(page.locator('#monthSummary')).toContainText('12/13');
+  await expect(page.locator('#monthSummary')).toContainText('day still open');
+});
+
+test('quick actions fill the span without typing', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  await open(page);
+  await page.locator('#addBtn').click();
+  await page.getByRole('button', { name: 'To now' }).click();
+  await expect(page.locator('#editTo')).toHaveValue('14:20');
+
+  await page.getByRole('button', { name: '30m' }).click();
+  await expect(page.locator('#editTo')).toHaveValue('13:30');
+});

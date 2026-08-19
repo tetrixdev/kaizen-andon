@@ -16,6 +16,58 @@
     <div class="etable" id="entries"></div>
   </div>
 
+  <!-- Filing. Replaces the ledger rather than sitting beside them: the window
+       is 292 wide when it is closed and there is no room for two panels. -->
+  <div class="editor" id="editor" hidden>
+    <div class="panel-head">
+      <span class="panel-title" id="editorTitle">Account for a span</span>
+      <button class="btn btn-ghost" id="editorClose" type="button">Cancel</button>
+    </div>
+    <div class="editor-grid">
+      <label class="fld"><span class="fld-label">From</span>
+        <input id="editFrom" class="inp mono" type="text" inputmode="numeric" placeholder="13:00" spellcheck="false"></label>
+      <label class="fld"><span class="fld-label">To</span>
+        <input id="editTo" class="inp mono" type="text" inputmode="numeric" placeholder="14:35" spellcheck="false"></label>
+      <div class="fld fld-wide"><span class="fld-label">Quick</span>
+        <div class="quick" id="editQuick"></div></div>
+      <div class="fld"><span class="fld-label">Kind</span>
+        <div class="toggle" id="editKind">
+          <button type="button" class="toggle-btn on" data-kind="work">Work</button>
+          <button type="button" class="toggle-btn" data-kind="rest">Rest</button>
+        </div></div>
+      <label class="fld fld-wide"><span class="fld-label">What</span>
+        <input id="editWhat" class="inp" type="text" placeholder="What was it" spellcheck="false"></label>
+      <label class="fld ext"><span class="fld-label">Reference</span>
+        <input id="editRef" class="inp mono" type="text" placeholder="TE-4471" spellcheck="false"></label>
+      <label class="fld ext fld-wide"><span class="fld-label">Link</span>
+        <input id="editLink" class="inp" type="text" placeholder="https://" spellcheck="false"></label>
+    </div>
+    <div class="panel-foot">
+      <span class="panel-note" id="editorNote"></span>
+      <button class="btn btn-seal" id="editorSave" type="button">File it</button>
+    </div>
+  </div>
+
+  <!-- Looking back. A month of tiles, then one day loads in historical mode. -->
+  <div class="history" id="history" hidden>
+    <div class="panel-head">
+      <div class="month-nav">
+        <button class="btn btn-ghost" id="monthPrev" type="button" aria-label="Previous month">‹</button>
+        <span class="panel-title" id="historyTitle">&nbsp;</span>
+        <button class="btn btn-ghost" id="monthNext" type="button" aria-label="Next month">›</button>
+      </div>
+      <button class="btn btn-ghost" id="historyClose" type="button">Close</button>
+    </div>
+    <div class="history-body">
+      <div class="calendar">
+        <div class="weekdays" id="weekdays"></div>
+        <div class="month-grid" id="monthGrid"></div>
+      </div>
+      <div class="month-summary" id="monthSummary"></div>
+    </div>
+    <p class="panel-note" id="historyNote">A filled square held work. The seal beneath it means the day also reached the other system.</p>
+  </div>
+
   <!-- First run: the build is generic, so it has to be told which Kaizen is
        yours. Nothing else is reachable until it is. -->
   <div class="setup" id="setup" hidden>
@@ -25,6 +77,13 @@
       <button class="btn btn-seal" id="connectBtn">Connect</button>
     </div>
     <p class="setup-note" id="setupNote">Your browser opens to approve it. Nothing but the token is kept.</p>
+  </div>
+
+  <!-- Looking at a finished day. Permanent, because a past day that looks like
+       today is the one mistake here that writes to the wrong date. -->
+  <div class="banner" id="banner" hidden>
+    <span class="banner-text" id="bannerText"></span>
+    <button class="btn btn-ghost" id="backToToday" type="button">Back to today</button>
   </div>
 
   <!-- The card. The whole thing is one button. -->
@@ -40,7 +99,27 @@
     </div>
     <div class="actions" id="actions" hidden>
       <button class="btn btn-seal" id="discuss">Discuss today with AI</button>
+      <button class="btn btn-ghost" id="startBtn" hidden>Start the day</button>
+      <button class="btn btn-ghost" id="addBtn">Add entry</button>
+      <button class="btn btn-ghost" id="historyBtn">History</button>
       <button class="btn btn-ghost" id="snoozeBtn" hidden>Put it down</button>
+    </div>
+  </div>
+
+  <!-- Segment detail. Floating, so it never changes what the window measures.
+       Hover reads; clicking pins, and only a pinned card has live actions and
+       a clickable link: a link inside something that closes when the cursor
+       drifts is a target you would miss half the time. -->
+  <div class="pop" id="pop" hidden data-floating>
+    <div class="pop-head">
+      <span class="pop-title" id="popTitle"></span>
+      <span class="pop-span mono" id="popSpan"></span>
+    </div>
+    <div class="pop-body" id="popBody"></div>
+    <div class="pop-actions" id="popActions" hidden>
+      <button class="btn btn-ghost" id="popEdit" type="button">Edit</button>
+      <button class="btn btn-ghost" id="popSplit" type="button">Split</button>
+      <button class="btn btn-ghost" id="popDelete" type="button">Delete</button>
     </div>
   </div>
 
