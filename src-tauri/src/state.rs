@@ -101,77 +101,6 @@ impl Config {
     }
 }
 
-/// Where the tokens live.
-///
-/// Separate from Config on purpose: the config is ordinary settings anyone may
-/// read, the tokens are the thing that would let somebody act as the user.
-/// They go to a file the owner alone can read, and on Windows that is under
-/// %APPDATA%, which is already user-scoped.
-///
-/// DEFERRED: the Windows Credential Manager is the right home, and the shape
-/// here is a straight swap when that lands. It is worth being plain about the
-/// gap rather than implying more protection than exists: DPAPI unlocks for the
-/// same user anyway, so the practical difference is against another account on
-/// the machine, not against anything running as this one.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Secrets {
-    #[serde(default)]
-    pub access_token: Option<String>,
-    #[serde(default)]
-    pub refresh_token: Option<String>,
-}
-
-impl Secrets {
-    fn path(app: &AppHandle) -> io::Result<PathBuf> {
-        let dir = app
-            .path()
-            .app_config_dir()
-            .map_err(|e| io::Error::other(e.to_string()))?;
-
-        fs::create_dir_all(&dir)?;
-
-        Ok(dir.join("tokens.json"))
-    }
-
-    pub fn load(app: &AppHandle) -> io::Result<Self> {
-        match fs::read_to_string(Self::path(app)?) {
-            Ok(raw) => Ok(serde_json::from_str(&raw).unwrap_or_default()),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e),
-        }
-    }
-
-    pub fn save(&self, app: &AppHandle) -> io::Result<()> {
-        let path = Self::path(app)?;
-        let tmp = path.with_extension("json.tmp");
-
-        fs::write(
-            &tmp,
-            serde_json::to_string(self).map_err(|e| io::Error::other(e.to_string()))?,
-        )?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
-        }
-
-        fs::rename(&tmp, &path)
-    }
-
-    pub fn clear(app: &AppHandle) -> io::Result<()> {
-        match fs::remove_file(Self::path(app)?) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e),
-        }
-    }
-
-    pub fn has_token(&self) -> bool {
-        self.access_token.as_deref().is_some_and(|t| !t.is_empty())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,24 +159,6 @@ mod tests {
             "a client belongs to the server that issued it"
         );
         assert_eq!(Config::default().client_for("https://x"), None);
-    }
-
-    #[test]
-    fn secrets_start_empty_and_report_it() {
-        let secrets = Secrets::default();
-        assert!(!secrets.has_token());
-
-        let secrets = Secrets {
-            access_token: Some(String::new()),
-            refresh_token: None,
-        };
-        assert!(!secrets.has_token(), "an empty string is not a token");
-
-        let secrets = Secrets {
-            access_token: Some("eyJ0eXAi".into()),
-            refresh_token: Some("def502".into()),
-        };
-        assert!(secrets.has_token());
     }
 
     #[test]

@@ -9,6 +9,7 @@ pub mod auth;
 pub mod ledger;
 pub mod placement;
 pub mod state;
+pub mod vault;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -140,11 +141,10 @@ fn connect(app: AppHandle, server: String) -> Result<String, String> {
 
     let tokens = auth::exchange_code(&discovery, &client_id, &redirect, &code, &pkce.verifier)?;
 
-    state::Secrets {
+    vault::save(&vault::Tokens {
         access_token: Some(tokens.access_token),
         refresh_token: tokens.refresh_token,
-    }
-    .save(&app)
+    })
     .map_err(|e| format!("could not store the token: {e}"))?;
 
     let mut config = state::Config::load(&app).unwrap_or_default();
@@ -159,7 +159,7 @@ fn connect(app: AppHandle, server: String) -> Result<String, String> {
 /// still holds a live token is worse than either state.
 #[tauri::command]
 fn disconnect(app: AppHandle) -> Result<(), String> {
-    state::Secrets::clear(&app).map_err(|e| e.to_string())?;
+    vault::clear()?;
 
     let mut config = state::Config::load(&app).unwrap_or_default();
     config.server_url = None;
@@ -173,7 +173,7 @@ fn disconnect(app: AppHandle) -> Result<(), String> {
 fn fetch_day(app: AppHandle, date: Option<String>) -> Result<api::Day, String> {
     let config = state::Config::load(&app).map_err(|e| e.to_string())?;
     let server = config.server_url.ok_or("not connected")?;
-    let mut secrets = state::Secrets::load(&app).map_err(|e| e.to_string())?;
+    let mut secrets = vault::load()?;
     let token = secrets.access_token.clone().ok_or("not connected")?;
 
     let call = |token: &str| {
@@ -204,7 +204,7 @@ fn fetch_day(app: AppHandle, date: Option<String>) -> Result<api::Day, String> {
         if tokens.refresh_token.is_some() {
             secrets.refresh_token = tokens.refresh_token.clone();
         }
-        secrets.save(&app).map_err(|e| e.to_string())?;
+        vault::save(&secrets)?;
 
         call(&tokens.access_token).map_err(|e| format!("could not reach Kaizen: {e}"))?
     } else {
@@ -223,8 +223,7 @@ fn fetch_day(app: AppHandle, date: Option<String>) -> Result<api::Day, String> {
 fn fetch_prompt(app: AppHandle, date: Option<String>) -> Result<api::Prompt, String> {
     let config = state::Config::load(&app).map_err(|e| e.to_string())?;
     let server = config.server_url.ok_or("not connected")?;
-    let secrets = state::Secrets::load(&app).map_err(|e| e.to_string())?;
-    let token = secrets.access_token.ok_or("not connected")?;
+    let token = vault::load()?.access_token.ok_or("not connected")?;
 
     let mut url = api::url(&server, "/prompt");
     if let Some(date) = date {

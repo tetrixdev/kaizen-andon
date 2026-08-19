@@ -40,6 +40,21 @@ store.
 The smooth path is the **Connect** button in Kaizen's own settings, which hands
 the address over via a `kaizen-andon://` link so there is nothing to type.
 
+## Where the token lives
+
+Windows Credential Manager, which is DPAPI underneath.
+
+The reason is not the threat people picture. DPAPI unlocks automatically for
+the same user, so anything already running as you can read either a credential
+or a file. What it actually buys is protection for **copies at rest**:
+`%APPDATA%` is backed up, synced and folder-redirected, and a Kaizen refresh
+token is valid for a year, so a plaintext one travels off the machine in places
+nobody is thinking about. A DPAPI blob is bound to this machine and user and is
+inert anywhere else.
+
+Off Windows there is no Credential Manager, so the store is in memory and only
+CI and local checks ever reach it. Only Windows ships.
+
 ## Traps
 
 **Icons must be RGBA.** `tauri::generate_context!` panics at compile time on an

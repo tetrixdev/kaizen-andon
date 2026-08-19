@@ -24,6 +24,10 @@ getrandom = "0.3"
 # Already in the tree via tauri, so taking it directly costs no extra build.
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 
+# Windows Credential Manager, which is DPAPI underneath. A token here lives a
+# year, and %APPDATA% gets backed up and folder-redirected, so a plaintext one
+# travels off the machine in places nobody thinks about. A DPAPI blob is bound
+# to this machine and user and is inert anywhere else.
 # SPI_GETWORKAREA. The taskbar's height is not a constant: it changes with DPI
 # and the small-buttons setting, it can sit on any edge, and it can auto-hide.
 # Anything that subtracts a hardcoded number breaks the first time somebody
@@ -33,6 +37,12 @@ windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+# The Credential Manager, which is DPAPI underneath. A token here lives a year,
+# and %APPDATA% is backed up, synced and folder-redirected, so a plaintext copy
+# travels off the machine in places nobody thinks about. A DPAPI blob is bound
+# to this machine and user and is inert anywhere else.
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 [profile.release]
 codegen-units = 1
