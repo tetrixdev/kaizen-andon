@@ -3,3 +3,7 @@
 node_modules
 .DS_Store
 *.tmp
+
+# Updater signing keys never belong in the repository.
+*.key
+*.key.pub

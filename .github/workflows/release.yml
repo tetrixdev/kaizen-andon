@@ -4,11 +4,16 @@ name: release
 # key, and publishes latest.json beside it. That file is what the installed
 # app reads to know it is behind.
 #
-# TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD must exist
-# as repository secrets before the first tag. Without them the build still
-# produces an installer, but nothing can update itself, because the app
-# refuses any update it cannot verify. That refusal is the point: whoever can
-# serve a fake latest.json would otherwise be running code on the machine.
+# TAURI_SIGNING_PRIVATE_KEY must exist as a repository secret before the first
+# tag. Without it the build still produces an installer, but nothing can update
+# itself, because the app refuses any update it cannot verify. That refusal is
+# the point: whoever can serve a fake latest.json would otherwise be running
+# code on the machine.
+#
+# The key carries no passphrase, so the password is set here to the empty
+# string rather than to a second secret. A passphrase would only protect the
+# key from somebody who can already read this repository's secrets, which is
+# the same person who can push a tag.
 on:
   push:
     tags: ['v*']
@@ -36,15 +41,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Kaizen Desktop ${{ github.ref_name }}
           releaseBody: |
             Download the installer below.
 
-            The app updates itself after this: it checks on launch and offers
-            when a newer build is out.
+            This is the only install you do by hand. Every launch after it
+            checks for a newer build and takes it, so there is nothing to
+            come back here for.
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true

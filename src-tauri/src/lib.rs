@@ -16,6 +16,7 @@ use serde_json::json;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
+use tauri_plugin_updater::UpdaterExt;
 
 /// What the frontend receives for a deep link.
 fn intent_payload(intent: &deeplink::Intent) -> serde_json::Value {
@@ -301,6 +302,26 @@ fn fetch_prompt(app: AppHandle, date: Option<String>) -> Result<api::Prompt, Str
         .map_err(|e| format!("Kaizen answered something unexpected: {e}"))
 }
 
+/// Fetch and install a newer build, if there is one.
+///
+/// This runs once, at launch, and it does not ask. A lamp has no unsaved work
+/// to lose, and a 292px card has nowhere to put a dialog, so a prompt here
+/// would only ever be something to dismiss. What makes not asking safe is the
+/// signature: the download is verified against the public key compiled into
+/// this binary before any of it is run, so whoever can serve a `latest.json`
+/// still cannot serve code.
+async fn install_any_update(app: tauri::AppHandle) -> tauri_plugin_updater::Result<()> {
+    let Some(update) = app.updater()?.check().await? else {
+        return Ok(());
+    };
+
+    update.download_and_install(|_, _| {}, || {}).await?;
+
+    // Diverges, so nothing follows it. On Windows the installer usually ends
+    // the process before this is reached anyway.
+    app.restart()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -319,6 +340,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             place_window,
             load_config,
@@ -332,6 +354,16 @@ pub fn run() {
             wake
         ])
         .setup(|app| {
+            // Deliberately not awaited: the card belongs on screen whether or
+            // not GitHub is reachable, and a failed check is not worth saying
+            // anything about. The next launch tries again.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = install_any_update(handle).await {
+                    eprintln!("update check: {e}");
+                }
+            });
+
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;

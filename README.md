@@ -81,10 +81,20 @@ publishes `latest.json` for the self-updater.
 
 ### Signing
 
-Updates are cryptographically signed and the app refuses any it cannot verify.
-Generate the keypair once with `cargo tauri signer generate`, then set
-`TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` as
-repository secrets and put the public key in `tauri.conf.json`.
+Updates are cryptographically signed and the app refuses any it cannot verify,
+so a `latest.json` from anyone but the holder of the key buys nothing. The
+public half is in `tauri.conf.json`; the private half exists only as the
+`TAURI_SIGNING_PRIVATE_KEY` repository secret, and is not recoverable from
+anywhere else. It carries no passphrase, which is why the release workflow
+passes an empty password rather than reading a second secret.
+
+Regenerating the pair is a breaking act: every installed copy verifies against
+the public key it was built with, so a new key means everyone reinstalls by
+hand. Generate a replacement only if the old one leaks.
+
+```
+npx @tauri-apps/cli signer generate -w kaizen-andon.key
+```
 
 Windows *code* signing is deliberately skipped. SmartScreen fires on Mark of
 the Web, which the browser applies at download time, so it is a first-install

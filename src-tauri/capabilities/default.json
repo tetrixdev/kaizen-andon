@@ -13,6 +13,7 @@
     "core:window:allow-set-focus",
     "opener:default",
     "opener:allow-open-url",
-    "deep-link:default"
+    "deep-link:default",
+    "updater:default"
   ]
 }
