@@ -257,7 +257,10 @@ mod tests {
 
         let pieces = split(&raw, CHUNK);
 
-        assert!(pieces.len() > 1, "this is exactly the value that did not fit");
+        assert!(
+            pieces.len() > 1,
+            "this is exactly the value that did not fit"
+        );
         assert!(
             pieces.iter().all(|p| p.chars().count() <= CHUNK),
             "no piece may exceed what one entry holds"
