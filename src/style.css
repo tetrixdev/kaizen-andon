@@ -51,6 +51,15 @@ html, body {
   cursor: default;
 }
 
+/* The `hidden` attribute is a UA rule, and a UA rule loses to ANY author rule
+   at the same specificity. `.actions { display: flex }` therefore beat it, and
+   the setup panel, the actions row and the snooze button all drew at once on
+   top of each other in an 88px window. Nothing in the markup looks wrong; the
+   attribute is simply ignored. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   height: 100vh;
   display: flex;

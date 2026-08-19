@@ -233,10 +233,37 @@ async function toggle() {
   actions.hidden = !expanded;
 
   try {
-    await invoke('place_window', { expanded });
+    await invoke('place_window', { mode: expanded ? 'expanded' : 'compact' });
   } catch (e) {
     console.error('place_window failed', e);
   }
+}
+
+/**
+ * Show or hide the setup panel, and size the window to it.
+ *
+ * The height cannot be a constant on this side either: it is however tall the
+ * explanation happens to wrap to in whatever font Windows resolved and at
+ * whatever text scaling is set. Measuring is the only way to be right on a
+ * machine this was not written on. Laying out is not affected by the window
+ * being too small to show the result, so this reads true even while the panel
+ * is still clipped.
+ */
+async function showSetup(show) {
+  setup.hidden = !show;
+
+  if (!show) {
+    return invoke('place_window', { mode: 'compact' }).catch(() => {});
+  }
+
+  const style = getComputedStyle(document.body);
+  const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+  const gap = parseFloat(style.rowGap) || 0;
+  const height = Math.ceil(
+    setup.getBoundingClientRect().height + card.getBoundingClientRect().height + padding + gap,
+  );
+
+  return invoke('place_window', { mode: 'setup', height }).catch(() => {});
 }
 
 card.addEventListener('click', (event) => {
@@ -259,7 +286,7 @@ snoozeBtn.addEventListener('click', async (event) => {
 listen('deep-link', async ({ payload }) => {
   if (payload?.action === 'connect' && payload.server) {
     serverInput.value = payload.server;
-    setup.hidden = false;
+    await showSetup(true);
     connectBtn.click();
   }
 }).catch((e) => console.error('deep-link listener', e));
@@ -290,7 +317,7 @@ connectBtn.addEventListener('click', async () => {
 
   try {
     await invoke('connect', { server });
-    setup.hidden = true;
+    await showSetup(false);
     await refresh();
   } catch (e) {
     setupNote.textContent = String(e);
@@ -310,8 +337,8 @@ connectBtn.addEventListener('click', async () => {
   }
 
   if (!config.server_url || !config.client_id) {
-    setup.hidden = false;
     renderIdle('Not connected yet.');
+    await showSetup(true);
     serverInput.focus();
     return;
   }

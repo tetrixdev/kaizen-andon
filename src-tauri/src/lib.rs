@@ -32,14 +32,26 @@ const COMPACT: (i32, i32) = (292, 88);
 /// Expanded: the bar plus the ledger above it.
 const EXPANDED_HEIGHT: i32 = 420;
 
+/// What the setup panel is allowed to ask for, in logical pixels.
+///
+/// Setup is the one state whose height is not a design decision: it depends on
+/// how its explanatory text wraps, which depends on the font Windows actually
+/// resolves and on the user's text scaling. A constant here would be a guess
+/// made on a different machine, so the page measures itself and sends the
+/// number. The clamp is only there so a broken measurement cannot produce a
+/// window the size of the screen or one nobody can see.
+const SETUP_HEIGHT: (i32, i32) = (140, 460);
+
 const TRAY_ID: &str = "kaizen";
 
 /// Put the window where it belongs and size it for the state it is in.
 ///
-/// Compact and expanded share the bottom-right anchor, so opening grows the
-/// card up and to the left and the lamp itself never moves.
+/// Every state shares the bottom-right anchor, so opening grows the card up
+/// and to the left and the lamp itself never moves.
+///
+/// `height` is read only in setup, where the page has measured itself.
 #[tauri::command]
-fn place_window(window: WebviewWindow, expanded: bool) -> Result<(), String> {
+fn place_window(window: WebviewWindow, mode: String, height: Option<i32>) -> Result<(), String> {
     let scale = window.scale_factor().unwrap_or(1.0);
 
     let area = placement::work_area().unwrap_or_else(|| {
@@ -68,16 +80,24 @@ fn place_window(window: WebviewWindow, expanded: bool) -> Result<(), String> {
         }
     });
 
-    let (width, height) = if expanded {
-        (
+    let logical = |n: i32| (n as f64 * scale).round() as i32;
+
+    let (width, height) = match mode.as_str() {
+        "expanded" => (
             placement::expanded_width(area, scale),
-            (EXPANDED_HEIGHT as f64 * scale).round() as i32,
-        )
-    } else {
-        (
-            (COMPACT.0 as f64 * scale).round() as i32,
-            (COMPACT.1 as f64 * scale).round() as i32,
-        )
+            logical(EXPANDED_HEIGHT),
+        ),
+        "setup" => (
+            logical(COMPACT.0),
+            logical(
+                height
+                    .unwrap_or(SETUP_HEIGHT.1)
+                    .clamp(SETUP_HEIGHT.0, SETUP_HEIGHT.1),
+            ),
+        ),
+        // Anything unrecognised is the compact card, which is the state it is
+        // always safe to be in.
+        _ => (logical(COMPACT.0), logical(COMPACT.1)),
     };
 
     let (x, y) = placement::anchor(area, width, height, scale);
@@ -387,7 +407,7 @@ pub fn run() {
                 .build(app)?;
 
             if let Some(window) = app.get_webview_window("main") {
-                let _ = place_window(window, false);
+                let _ = place_window(window, "compact".into(), None);
             }
 
             // A cold start from a deep link: the URL is in our own arguments.
