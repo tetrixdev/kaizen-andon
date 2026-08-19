@@ -123,7 +123,9 @@ mod tests {
     /// A failing test leaves the lock poisoned, which would turn one real
     /// failure into every other test failing too and bury the cause.
     fn exclusive() -> std::sync::MutexGuard<'static, ()> {
-        STORE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        STORE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     #[test]
