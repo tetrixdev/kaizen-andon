@@ -6,6 +6,7 @@
 // implementations of those rules would drift within a week.
 
 const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
 
 const card = document.getElementById('card');
 const lamp = document.getElementById('lamp');
@@ -23,6 +24,7 @@ const serverInput = document.getElementById('server');
 const connectBtn = document.getElementById('connectBtn');
 const setupNote = document.getElementById('setupNote');
 const discussBtn = document.getElementById('discuss');
+const snoozeBtn = document.getElementById('snoozeBtn');
 
 const STATE_CLASSES = ['lit-wait', 'lit-ok', 'lit-warm', 'lit-call', 'lit-off'];
 const LAMP_FOR = { waiting: 'lit-wait', running: 'lit-ok', attention: 'lit-warm', call: 'lit-call', quiet: 'lit-off' };
@@ -161,6 +163,17 @@ function render(l) {
 
   renderTrack(l);
   renderEntries(l);
+
+  // The card can be hidden or snoozed; the tray is the one surface always
+  // there, so it carries the number.
+  const [amount, what] = [delta.textContent, deltaLabel.textContent];
+  invoke('set_tooltip', { text: `Kaizen · ${amount} ${what} · ${l.context}` }).catch(() => {});
+
+  // Putting it down is a Running-only privilege. From attention up there is no
+  // hiding, which is the rule that makes the end of the day always show.
+  snoozeBtn.hidden = l.state !== 'running';
+  snoozeBtn.dataset.state = l.state;
+  snoozeBtn.dataset.date = l.date;
 }
 
 /** A day with no context carrying a target is not an error. */
@@ -187,6 +200,13 @@ async function refresh() {
     }
 
     render(leading);
+
+    // A snooze lapses the moment the lamp has something else to say, and that
+    // is exactly the case this widget exists for, so it must not stay hidden.
+    if (['call', 'attention'].includes(leading.state)) {
+      invoke('wake').catch(() => {});
+    }
+
     schedule(['call', 'attention'].includes(leading.state) ? LOUD_MS : CALM_MS);
   } catch (e) {
     // A network blip must not blank the card: keep the last reading and say
@@ -223,6 +243,26 @@ card.addEventListener('click', (event) => {
   if (event.target.closest('.btn') || setup.hidden === false) return;
   toggle();
 });
+
+snoozeBtn.addEventListener('click', async (event) => {
+  event.stopPropagation();
+
+  try {
+    await invoke('snooze', { state: snoozeBtn.dataset.state, today: snoozeBtn.dataset.date });
+  } catch (e) {
+    console.error(e);
+  }
+});
+
+// A deep link, from Kaizen's own Connect button. The address arrives from the
+// link that was clicked rather than from the binary that was downloaded.
+listen('deep-link', async ({ payload }) => {
+  if (payload?.action === 'connect' && payload.server) {
+    serverInput.value = payload.server;
+    setup.hidden = false;
+    connectBtn.click();
+  }
+}).catch((e) => console.error('deep-link listener', e));
 
 discussBtn.addEventListener('click', async (event) => {
   event.stopPropagation();

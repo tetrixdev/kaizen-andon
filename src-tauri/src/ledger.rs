@@ -36,6 +36,34 @@ impl State {
     pub fn is_snoozeable(&self) -> bool {
         matches!(self, State::Running)
     }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            State::Waiting => "waiting",
+            State::Running => "running",
+            State::Attention => "attention",
+            State::Call => "call",
+            State::Quiet => "quiet",
+        }
+    }
+}
+
+/// Whether a snooze still holds.
+///
+/// It lapses three ways, and all three matter: the day rolled over, the lamp
+/// found something else to say, or there was never a snooze. Hiding a card
+/// that has since gone from running to call would be the one failure this
+/// whole widget exists to prevent.
+pub fn snooze_holds(
+    snoozed_at_state: Option<&str>,
+    snoozed_on: Option<&str>,
+    today: &str,
+    now: State,
+) -> bool {
+    match (snoozed_at_state, snoozed_on) {
+        (Some(was), Some(day)) => day == today && was == now.as_str() && now.is_snoozeable(),
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,6 +213,36 @@ mod tests {
         for state in [State::Waiting, State::Attention, State::Call, State::Quiet] {
             assert!(!state.is_snoozeable(), "{state:?} must not be hideable");
         }
+    }
+
+    #[test]
+    fn a_snooze_lapses_the_moment_the_lamp_has_something_else_to_say() {
+        let held = |state| snooze_holds(Some("running"), Some("2026-08-19"), "2026-08-19", state);
+
+        assert!(held(State::Running), "still quiet, still hidden");
+        assert!(!held(State::Attention), "a hole crossed the threshold");
+        assert!(!held(State::Call), "and this one especially");
+    }
+
+    #[test]
+    fn a_snooze_does_not_survive_the_day_boundary() {
+        assert!(!snooze_holds(
+            Some("running"),
+            Some("2026-08-18"),
+            "2026-08-19",
+            State::Running
+        ));
+    }
+
+    #[test]
+    fn no_snooze_means_no_snooze() {
+        assert!(!snooze_holds(None, None, "2026-08-19", State::Running));
+        assert!(!snooze_holds(
+            Some("running"),
+            None,
+            "2026-08-19",
+            State::Running
+        ));
     }
 
     #[test]

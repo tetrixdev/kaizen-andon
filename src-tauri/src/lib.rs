@@ -6,20 +6,32 @@
 
 pub mod api;
 pub mod auth;
+pub mod deeplink;
 pub mod ledger;
 pub mod placement;
 pub mod state;
 pub mod vault;
 
+use serde_json::json;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
+
+/// What the frontend receives for a deep link.
+fn intent_payload(intent: &deeplink::Intent) -> serde_json::Value {
+    match intent {
+        deeplink::Intent::Connect { server } => json!({ "action": "connect", "server": server }),
+        deeplink::Intent::Show => json!({ "action": "show" }),
+    }
+}
 
 /// Compact card: one glyph, one number, one strip. Readable in a glance.
 const COMPACT: (i32, i32) = (292, 88);
 
 /// Expanded: the bar plus the ledger above it.
 const EXPANDED_HEIGHT: i32 = 420;
+
+const TRAY_ID: &str = "kaizen";
 
 /// Put the window where it belongs and size it for the state it is in.
 ///
@@ -218,6 +230,53 @@ fn fetch_day(app: AppHandle, date: Option<String>) -> Result<api::Day, String> {
         .map_err(|e| format!("Kaizen answered something unexpected: {e}"))
 }
 
+/// What the tray icon says on hover. The card may be hidden or snoozed; the
+/// tray is the one surface that is always there, so it carries the number.
+#[tauri::command]
+fn set_tooltip(app: AppHandle, text: String) -> Result<(), String> {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        tray.set_tooltip(Some(&text)).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// Put the lamp down until it has something else to say.
+///
+/// Only from Running: from Attention up there is no hiding, which is the rule
+/// that makes the end of the day always show.
+#[tauri::command]
+fn snooze(app: AppHandle, state: String, today: String) -> Result<(), String> {
+    if state != "running" {
+        return Err("only a quiet lamp can be put down".into());
+    }
+
+    let mut config = state::Config::load(&app).map_err(|e| e.to_string())?;
+    config.snoozed_at_state = Some(state);
+    config.snoozed_on = Some(today);
+    config.save(&app).map_err(|e| e.to_string())?;
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn wake(app: AppHandle) -> Result<(), String> {
+    let mut config = state::Config::load(&app).map_err(|e| e.to_string())?;
+    config.snoozed_at_state = None;
+    config.snoozed_on = None;
+    config.save(&app).map_err(|e| e.to_string())?;
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+    }
+
+    Ok(())
+}
+
 /// The clipboard text: the day, its holes, and the context's own instructions.
 #[tauri::command(async)]
 fn fetch_prompt(app: AppHandle, date: Option<String>) -> Result<api::Prompt, String> {
@@ -245,6 +304,20 @@ fn fetch_prompt(app: AppHandle, date: Option<String>) -> Result<api::Prompt, Str
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Single instance first, and it matters: a deep link launches the exe
+        // again, so without this a second copy would sit holding the URL while
+        // the first shows an unconnected card.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+
+            if let Some(intent) = deeplink::from_args(argv) {
+                let _ = app.emit("deep-link", intent_payload(&intent));
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             place_window,
@@ -253,22 +326,27 @@ pub fn run() {
             connect,
             disconnect,
             fetch_day,
-            fetch_prompt
+            fetch_prompt,
+            set_tooltip,
+            snooze,
+            wake
         ])
         .setup(|app| {
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
 
-            TrayIconBuilder::new()
+            TrayIconBuilder::with_id(TRAY_ID)
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .tooltip("Kaizen")
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => app.exit(0),
                     "show" => {
+                        // Showing from the tray also wakes it: somebody
+                        // reaching for the menu is asking to see it again.
+                        let _ = wake(app.clone());
                         if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
                             let _ = window.set_focus();
                         }
                     }
@@ -278,6 +356,17 @@ pub fn run() {
 
             if let Some(window) = app.get_webview_window("main") {
                 let _ = place_window(window, false);
+            }
+
+            // A cold start from a deep link: the URL is in our own arguments.
+            if let Some(intent) = deeplink::from_args(std::env::args()) {
+                let handle = app.handle().clone();
+                let payload = intent_payload(&intent);
+                // After setup, or the frontend is not listening yet.
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                    let _ = handle.emit("deep-link", payload);
+                });
             }
 
             Ok(())

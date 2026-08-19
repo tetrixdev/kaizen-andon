@@ -24,9 +24,16 @@ pub struct Config {
     pub kaizen_day: Option<String>,
 
     /// Snoozing is a Running-only privilege, and it lapses at the next
-    /// threshold crossing rather than lasting the day.
+    /// threshold crossing rather than lasting the day. Storing the state it
+    /// was snoozed at is what enforces that: the moment the lamp has something
+    /// else to say, the snooze is spent.
     #[serde(default)]
-    pub snoozed_until: Option<String>,
+    pub snoozed_at_state: Option<String>,
+
+    /// The kaizen day the snooze belongs to, so it cannot survive into
+    /// tomorrow and hide a fresh morning.
+    #[serde(default)]
+    pub snoozed_on: Option<String>,
 
     /// Which display it was on, so it comes back where it was left.
     #[serde(default)]
