@@ -396,7 +396,9 @@ fn wake(app: AppHandle) -> Result<(), String> {
 #[tauri::command(async)]
 fn fetch_prompt(app: AppHandle, date: Option<String>) -> Result<api::Prompt, String> {
     send(&app, |client, server, token| {
-        client.get(dated(server, "/prompt", &date)).bearer_auth(token)
+        client
+            .get(dated(server, "/prompt", &date))
+            .bearer_auth(token)
     })
 }
 
