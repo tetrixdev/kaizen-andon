@@ -93,6 +93,21 @@ function place(from, to, open, span) {
   return `left:${left}%;width:${width}%`;
 }
 
+/**
+ * Where "now" falls on the track, in minutes past midnight.
+ *
+ * Kaizen's clock, not this machine's. The server knows the account's timezone
+ * and the day being drawn is its day, so a laptop set to another zone would
+ * otherwise put the now-line and the not-yet cover hours away from the truth
+ * while every number beside them stayed right. The browser clock is only a
+ * fallback for the moment before the first answer arrives.
+ */
+function nowMinutes() {
+  if (localNow) return toMinutes(localNow);
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
+}
+
 function renderTrack(l) {
   const { open, span } = windowBounds(l);
   const parts = [];
@@ -102,6 +117,17 @@ function renderTrack(l) {
   if (l.started_at) {
     const started = toMinutes(l.started_at);
     if (started > open) parts.push(`<span class="seg dead" style="${place(open, started, open, span)}"></span>`);
+  }
+
+  // Time that has not happened yet is not a hole and must not read like one.
+  // Kaizen only ever reports gaps up to now, so without this the rest of the
+  // day is bare track, which is the same thing an unaccounted span looks like
+  // at a glance.
+  if (!viewDate) {
+    const nowMin = nowMinutes();
+    if (nowMin < open + span) {
+      parts.push(`<span class="seg notyet" style="${place(Math.max(nowMin, open), open + span, open, span)}"></span>`);
+    }
   }
 
   // The alternation is positional only: it flips on consecutive work and
@@ -133,8 +159,7 @@ function renderTrack(l) {
   // A finished day has no now, so a past day gets no hairline. Drawing one
   // would put "now" somewhere inside a day that ended hours ago.
   if (!viewDate) {
-    const now = new Date();
-    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const nowMin = nowMinutes();
     if (nowMin > open && nowMin < open + span) {
       parts.push(`<span class="now" style="left:${((nowMin - open) / span) * 100}%"></span>`);
     }

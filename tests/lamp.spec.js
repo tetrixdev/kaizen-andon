@@ -447,3 +447,30 @@ test('the bar still holds together on a narrow screen', async ({ page }) => {
 
   await page.screenshot({ path: 'state-narrow.png' });
 });
+
+test('time that has not happened is covered, not left looking like a hole', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  const seg = page.locator('#track .seg.notyet');
+  await expect(seg, 'the rest of the day must be covered').toHaveCount(1);
+
+  // It must end where the window does, and never overlap a filed entry.
+  const geom = await page.evaluate(() => {
+    const el = document.querySelector('#track .seg.notyet');
+    const track = document.getElementById('track').getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    return { right: Math.round(r.right - track.right), left: r.left - track.left };
+  });
+  expect(Math.abs(geom.right), 'it runs to the end of the window').toBeLessThan(2);
+  expect(geom.left).toBeGreaterThan(0);
+
+  // A finished day has no "not yet" at all.
+  await open(page);
+  await page.locator('#historyBtn').click();
+  await page.locator('.tile[data-date="2026-08-14"]').click();
+  await expect(page.locator('#banner')).toBeVisible();
+  await expect(page.locator('#track .seg.notyet')).toHaveCount(0);
+});

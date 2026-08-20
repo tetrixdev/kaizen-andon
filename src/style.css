@@ -521,3 +521,8 @@ body {
 .sum-figure { font-family: var(--serif); font-size: 19px; color: var(--ink); min-width: 46px; font-variant-numeric: tabular-nums; }
 .sum-row.faint { color: var(--ink-faint); }
 .sum-row.faint .sum-figure { color: var(--ink-faint); }
+
+/* Time that has not happened yet. Bare track reads exactly like a hole, and
+   Kaizen only reports gaps up to now, so the rest of the day is covered
+   rather than left looking unaccounted for. */
+.seg.notyet { background: color-mix(in srgb, var(--ink) 4%, transparent); }

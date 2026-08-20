@@ -35,12 +35,17 @@ pub struct Config {
     #[serde(default)]
     pub snoozed_on: Option<String>,
 
-    /// Which display it was on, so it comes back where it was left.
-    #[serde(default)]
-    pub display: Option<String>,
-
-    #[serde(default)]
-    pub expanded: bool,
+    // Two fields lived here that nothing ever read: which display the window
+    // was on, and whether it was left open.
+    //
+    // The display belongs with multi-monitor placement, which is not built:
+    // SPI_GETWORKAREA reports the primary screen only. A field promising the
+    // window "comes back where it was left" while nothing puts it there is
+    // worse than no field, because the next person reads it as done.
+    //
+    // Reopening expanded was a decision, not an omission. This is an ambient
+    // lamp, and restoring a 1222px bar across the corner of the screen on
+    // every launch is the opposite of ambient.
 
     /// The client this install registered as. Not a secret: Kaizen issues
     /// public clients, because a binary on the user's machine can always be
