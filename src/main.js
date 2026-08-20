@@ -460,7 +460,7 @@ function contentHeight() {
   // the window is sized to its content, so unless its height is counted there
   // is nowhere above the card for it to open into, and it flips downward past
   // the bottom edge where it is simply cut off.
-  const floating = pop.hidden ? 0 : pop.getBoundingClientRect().height + 10;
+  const floating = pop.hidden ? 0 : popReserve;
 
   // Which panel is on top changes with what is open, and the stack has to read
   // as one card rather than a pile of separately rounded boxes.
@@ -832,14 +832,44 @@ function showPop(target, kind, index) {
   if (isGap) lines.push('Open the day to account for it.');
   popBody.innerHTML = lines.join('<br>');
 
-  pop.hidden = false;
   popKey = `${kind}:${index}`;
+  reveal();
+}
 
-  // Ask for the taller window first, then place it: the segment itself moves
-  // down as the window grows, because the stack is anchored to the bottom.
-  fit(true);
+/** Room kept above the card for the detail card, in pixels. */
+let popReserve = 0;
+let revealing = 0;
+
+/**
+ * Lay the card out, make room for it, place it, and only then show it.
+ *
+ * Doing any of that in a different order is what made hovering jump. Shown
+ * first, it has nowhere to go and lands clamped against the top edge; the
+ * window then grows and it moves to where it belongs. Every block did that,
+ * and every block is a different height, so moving along the strip resized
+ * the window and re-placed the card over and over.
+ *
+ * The reserve only ever GROWS while the pointer is on the strip. The first
+ * block pays for a resize and the rest ride on the room it took, so sliding
+ * across the day is still.
+ */
+async function reveal() {
+  const mine = (revealing += 1);
+
+  // Laid out but not painted, so it can be measured without being seen.
+  pop.style.visibility = 'hidden';
+  pop.hidden = false;
+
+  const needed = Math.ceil(pop.getBoundingClientRect().height) + 10;
+
+  if (needed > popReserve) {
+    popReserve = needed;
+    await resize();
+    if (mine !== revealing || pop.hidden) return;
+  }
+
   placePop();
-  requestAnimationFrame(placePop);
+  pop.style.visibility = '';
 }
 
 /** Which segment the popover belongs to, so it can be re-placed after a resize. */
@@ -874,8 +904,11 @@ function placePop() {
 function closePop() {
   if (pop.hidden) return;
 
+  revealing += 1;
   pop.hidden = true;
+  pop.style.visibility = '';
   popKey = null;
+  popReserve = 0;
   fit(true);
 }
 

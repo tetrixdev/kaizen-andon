@@ -1159,3 +1159,50 @@ test('opening fades out and back in, with the resize hidden inside it', async ({
   expect(timing.back).toBe('0.13s');
   expect(timing.easing).toBe('linear');
 });
+
+test('sliding along the strip does not resize the window each time', async ({ page }) => {
+  // Every block is a different height, and the card used to be shown before
+  // there was room for it: it landed clamped against the top edge and moved
+  // once the window grew, on every single block.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await page.setViewportSize({ width: 292, height: 400 });
+
+  const asks = () => page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'place_window').length);
+
+  const before = await asks();
+  await page.locator('#track .seg[data-kind="entry"][data-index="0"]').hover();
+  await expect(page.locator('#pop')).toBeVisible();
+  const afterFirst = await asks();
+  expect(afterFirst, 'the first block pays for the room').toBeGreaterThan(before);
+
+  // The card must never be visible anywhere but above its own block.
+  for (const index of [2, 3, 0]) {
+    await page.locator(`#track .seg[data-kind="entry"][data-index="${index}"]`).hover();
+    await page.waitForTimeout(80);
+
+    const placed = await page.evaluate((i) => {
+      const pop = document.getElementById('pop');
+      const seg = document.querySelector(`#track .seg[data-kind="entry"][data-index="${i}"]`);
+      if (!seg || getComputedStyle(pop).visibility === 'hidden') return null;
+      const p = pop.getBoundingClientRect();
+      const s = seg.getBoundingClientRect();
+      return { above: p.bottom <= s.top + 1, clamped: p.top <= 7 };
+    }, index);
+
+    expect(placed, 'the card is shown').toBeTruthy();
+    expect(placed.above, `block ${index}: above its own block`).toBe(true);
+    expect(placed.clamped, `block ${index}: not jammed against the edge`).toBe(false);
+  }
+
+  // The reserve only grows, so a second pass over blocks already seen is free.
+  const settled = await asks();
+  for (const index of [2, 3, 0]) {
+    await page.locator(`#track .seg[data-kind="entry"][data-index="${index}"]`).hover();
+    await page.waitForTimeout(80);
+  }
+  expect(await asks(), 'going back over the same blocks costs nothing').toBe(settled);
+});
