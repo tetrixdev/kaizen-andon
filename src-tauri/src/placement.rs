@@ -133,7 +133,11 @@ mod tests {
         // to fade out inside a transparent, content-sized window.
         let (x, y) = anchor(full_hd(), 292 + SHADOW_ROOM * 2, 76, 1.0);
 
-        assert_eq!(x + SHADOW_ROOM, 1920 - MARGIN - 292, "the card, not the window");
+        assert_eq!(
+            x + SHADOW_ROOM,
+            1920 - MARGIN - 292,
+            "the card, not the window"
+        );
         assert_eq!(y, 1032 - WINDOW_MARGIN - 76);
     }
 
