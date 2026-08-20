@@ -252,6 +252,13 @@ const STATES = [
       await open(page);
       await expect(page.locator('#startBtn')).toBeVisible();
     } },
+  { name: 'quiet-day-done', config: CONNECTED,
+    day: { ledgers: [LEDGER({ state: 'quiet', phase: 'accounting', logs_externally: false,
+      started_at: '08:30', ended_at: '17:05', gap_minutes: 0, gaps: [], work_minutes: 480 })] } },
+  { name: 'second-phase', config: CONNECTED,
+    day: { ledgers: [LEDGER({ state: 'call', phase: 'referencing', gap_minutes: 0, gaps: [],
+      work_minutes: 480, unreferenced_minutes: 120, started_at: '08:30' })] },
+    async act(page) { await open(page); } },
   { name: 'expanded-long-day', config: CONNECTED, day: { ledgers: [LONG] },
     async act(page) { await page.locator('#card').click({ position: { x: 140, y: 40 } }); } },
 ];
@@ -815,4 +822,53 @@ test('the glow wraps the whole stack, and breathes rather than blinks', async ({
   expect(geom.lamp).toBe('breathe');
 
   await page.screenshot({ path: 'state-call-open.png' });
+});
+
+test('the second phase arrives only where a reference is required', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED,
+    { ledgers: [LEDGER({ phase: 'referencing', state: 'call', gap_minutes: 0, gaps: [],
+      work_minutes: 480, unreferenced_minutes: 120 })] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  // The glyph is the question: 灯 asks where the day went, 印 asks whether it
+  // reached the other system.
+  await expect(page.locator('#lamp')).toHaveText('印');
+  await expect(page.locator('#stack')).toHaveClass(/phase-referencing/);
+  await expect(page.locator('#delta')).toHaveText('2:00');
+  await expect(page.locator('#deltaLabel')).toContainText('not in the other system');
+
+  // The re-skin: unreferenced work hollows out and the alternation stops.
+  const seg = await page.evaluate(() => {
+    const el = document.querySelector('#track .seg.work.unref');
+    return el ? getComputedStyle(el).borderStyle : 'missing';
+  });
+  expect(seg).toBe('dashed');
+
+  await page.screenshot({ path: 'state-phase-two.png' });
+});
+
+test('a day that is done rests, and stops resting when you open it', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED,
+    { ledgers: [LEDGER({ state: 'quiet', logs_externally: false, started_at: '08:30',
+      ended_at: '17:05', gap_minutes: 0, gaps: [], work_minutes: 480 })] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  await expect(page.locator('#stack')).toHaveClass(/lit-off/);
+  const shut = await page.evaluate(() =>
+    getComputedStyle(document.getElementById('card')).opacity);
+  expect(Number(shut), 'a finished day steps back').toBeLessThan(1);
+
+  await open(page);
+  const openOpacity = await page.evaluate(() => ({
+    card: getComputedStyle(document.getElementById('card')).opacity,
+    slab: getComputedStyle(document.getElementById('slab')).opacity,
+  }));
+  expect(Number(openOpacity.card), 'nothing you asked to look at is dimmed').toBe(1);
+  expect(Number(openOpacity.slab), 'least of all the rows you are reading').toBe(1);
+
+  await page.screenshot({ path: 'state-quiet-open.png' });
 });

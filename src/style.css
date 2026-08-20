@@ -169,7 +169,13 @@ body {
 .lit-ok   { --lamp: var(--moss);      --lamp-glow: color-mix(in srgb, var(--moss) 18%, transparent); }
 .lit-warm { --lamp: var(--ochre);     --lamp-glow: color-mix(in srgb, var(--ochre) 28%, transparent); }
 .lit-call { --lamp: var(--vermilion); --lamp-glow: color-mix(in srgb, var(--vermilion) 34%, transparent); }
-.lit-off  { --lamp: var(--ink-faint); --lamp-glow: transparent; opacity: .62; }
+.lit-off  { --lamp: var(--ink-faint); --lamp-glow: transparent; }
+
+/* A quiet day steps back, but only the CARD does, and only while it is shut.
+   The state moved onto the stack so the light could reach the ledger, which
+   also meant this dimmed the rows you were reading. Opening it is a deliberate
+   act; nothing you asked to look at should be at 62%. */
+.lit-off .andon:not(.open) { opacity: .62; }
 
 .lit-warm .delta, .lit-call .delta { color: var(--lamp); }
 .lit-wait .delta, .lit-off .delta { color: var(--ink-faint); }
@@ -702,3 +708,12 @@ body {
 .fld-three { grid-column: span 3; }
 .panel-acts { display: flex; gap: 8px; align-items: center; }
 .editor .panel-note { margin-top: 10px; }
+
+
+/* ── The second phase ────────────────────────────────────
+   Reached only when the day adds up AND the context logs somewhere else, so a
+   personal context never sees it. The question stops being where the day went
+   and becomes whether it left the building, which is why the alternation stops
+   and the seal replaces the lamp. */
+.phase-referencing .lamp { font-size: 21px; }
+.phase-referencing .erow .pill.pending { background: color-mix(in srgb, var(--vermilion) 14%, transparent); color: #a8382d; }
