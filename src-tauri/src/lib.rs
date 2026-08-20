@@ -115,6 +115,26 @@ fn load_config(app: AppHandle) -> Result<state::Config, String> {
     state::Config::load(&app).map_err(|e| e.to_string())
 }
 
+/// What a copied error report carries besides the message.
+///
+/// A report saying only "error decoding response body" costs a round trip to
+/// find out which build, which Kaizen and which machine, and the person who
+/// hit it has usually moved on by then. None of this is secret: the version is
+/// public, the address is one the user typed, and no token goes near it.
+#[tauri::command]
+fn diagnostics(app: AppHandle) -> Result<serde_json::Value, String> {
+    let config = state::Config::load(&app).unwrap_or_default();
+
+    Ok(serde_json::json!({
+        "version": app.package_info().version.to_string(),
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "server": config.server_url,
+        "connected": config.client_id.is_some(),
+        "token_store": vault::backend(),
+    }))
+}
+
 /// Connect to a Kaizen: discover, register if this install has not before, and
 /// hand the browser the consent page. Blocks until the user comes back or
 /// three minutes pass, so it runs off the UI thread.
@@ -441,6 +461,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             place_window,
             load_config,
+            diagnostics,
             connect,
             disconnect,
             fetch_day,

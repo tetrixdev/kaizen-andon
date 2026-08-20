@@ -227,6 +227,8 @@ function render(l) {
   const bits = [l.context];
   if (l.target_minutes) bits.push(`${hhmm(l.work_minutes)} of ${hhmm(l.target_minutes)} logged`);
   if (l.started_at) bits.push(`started ${l.started_at}`);
+  // A fresh reading replaces a failure, so the red must go with it.
+  sub.classList.remove('bad');
   sub.textContent = bits.join(' · ');
 
   renderTrack(l);
@@ -295,7 +297,11 @@ async function refresh() {
   } catch (e) {
     // A network blip must not blank the card: keep the last reading and say
     // it is stale rather than pretending the day is suddenly empty.
-    sub.textContent = ledger ? `${sub.textContent} · not reachable` : String(e);
+    if (ledger) {
+      sub.textContent = `${sub.textContent} · not reachable`;
+    } else {
+      failed(sub, `fetch_day for ${viewDate ?? 'today'}`, e, { date: viewDate });
+    }
     schedule(LOUD_MS);
   }
 }
@@ -331,6 +337,13 @@ function contentHeight() {
   const panels = [...document.body.children].filter(
     (el) => el.tagName !== 'SCRIPT' && !el.hidden && !el.hasAttribute('data-floating'),
   );
+
+  // Which panel is on top changes with what is open, and the stack has to read
+  // as one card rather than a pile of separately rounded boxes.
+  for (const [index, el] of panels.entries()) {
+    el.classList.toggle('stack-top', index === 0);
+  }
+  card.classList.toggle('stacked', panels[0] !== card);
 
   return Math.ceil(
     panels.reduce((total, el) => total + el.getBoundingClientRect().height, 0) +
@@ -447,7 +460,8 @@ connectBtn.addEventListener('click', async () => {
     showSetup(false);
     await refresh();
   } catch (e) {
-    setupNote.textContent = String(e);
+    await failed(setupNote, `connect to ${server}`, e, { server });
+    showSetup(true);
   } finally {
     connectBtn.disabled = false;
     connectBtn.textContent = 'Connect';
@@ -473,6 +487,77 @@ connectBtn.addEventListener('click', async () => {
   setup.hidden = true;
   await refresh();
 })();
+
+// ── When something goes wrong ───────────────────────────────────────────
+//
+// An error the user can read is not the same as an error a developer can act
+// on. "Kaizen answered something unexpected" says nothing about which build,
+// which call, which arguments or which machine, and by the time anyone asks,
+// whoever hit it has moved on. So every failure is shown short and carries a
+// word that copies the long version.
+
+let facts = null;
+
+/** Asked once. Nothing here is secret: no token goes near it. */
+async function diagnostics() {
+  if (!facts) facts = await invoke('diagnostics').catch(() => ({}));
+  return facts;
+}
+
+function plainly(error) {
+  return String(error?.message ?? error).replace(/^Error:\s*/, '');
+}
+
+/**
+ * Show a failure, with a word that copies the whole story.
+ *
+ * `where` is the element to say it in; `doing` is what was being attempted,
+ * in the developer's terms rather than the user's, because that is the half
+ * a bug report is usually missing.
+ */
+async function failed(where, doing, error, args = null) {
+  const message = plainly(error);
+
+  where.innerHTML = `${esc(message)} · <button type="button" class="copy-error">copy</button>`;
+  where.classList.add('bad');
+
+  const button = where.querySelector('.copy-error');
+
+  button.addEventListener('click', async (event) => {
+    event.stopPropagation();
+
+    const report = [
+      'Kaizen Desktop error report',
+      '',
+      `What it was doing: ${doing}`,
+      `What it said:      ${message}`,
+      '',
+      `When:    ${new Date().toISOString()}`,
+      `Viewing: ${viewDate ?? 'today'}${localNow ? ` (Kaizen clock ${localNow})` : ''}`,
+      `Context: ${ledger?.context ?? 'none loaded'}`,
+      args ? `Arguments: ${JSON.stringify(args)}` : null,
+      '',
+      Object.entries(await diagnostics())
+        .map(([key, value]) => `${key}: ${value}`)
+        .join('\n'),
+      `screen: ${window.innerWidth}x${window.innerHeight} @${window.devicePixelRatio}`,
+      `agent: ${navigator.userAgent}`,
+    ].filter((line) => line !== null).join('\n');
+
+    try {
+      await navigator.clipboard.writeText(report);
+      button.textContent = 'copied · send it to the developer';
+    } catch {
+      button.textContent = 'could not copy';
+    }
+  });
+}
+
+/** Put a message back to ordinary, so a stale error does not linger. */
+function clearFailure(where) {
+  where.classList.remove('bad');
+  where.textContent = '';
+}
 
 // ── Segment detail ──────────────────────────────────────────────────────
 //
@@ -616,7 +701,7 @@ popDelete.addEventListener('click', async (event) => {
   try {
     apply(await invoke('delete_entry', { id: entry.id }));
   } catch (e) {
-    sub.textContent = String(e);
+    failed(sub, 'delete_entry', e, { id: entry.id });
   }
 });
 
@@ -692,8 +777,7 @@ function openEditor({ gap = null, entry = null, splitAt: at = null } = {}) {
   splitAt = at;
 
   editor.classList.toggle('external', !!ledger?.logs_externally);
-  editorNote.classList.remove('bad');
-  editorNote.textContent = '';
+  clearFailure(editorNote);
 
   if (at) {
     editorTitle.textContent = 'Split this in two';
@@ -761,8 +845,7 @@ async function fileEntries() {
   } catch (e) {
     // Kaizen's own words. The overlap rule is the one that gets met most, and
     // "09:00-10:00 overlaps an entry already filed" says what to change.
-    editorNote.classList.add('bad');
-    editorNote.textContent = String(e).replace(/^Error:\s*/, '');
+    failed(editorNote, 'save_entries', e, { entries, date: viewDate });
   } finally {
     button.disabled = false;
   }
@@ -788,7 +871,7 @@ endBtn.addEventListener('click', async (event) => {
       date: viewDate,
     }));
   } catch (e) {
-    sub.textContent = String(e).replace(/^Error:\s*/, '');
+    failed(sub, 'end_day', e, { reopen: endBtn.dataset.reopen === 'yes', date: viewDate });
   }
 });
 
@@ -797,7 +880,7 @@ startBtn.addEventListener('click', async (event) => {
   try {
     apply(await invoke('start_day', { at: null, date: viewDate }));
   } catch (e) {
-    sub.textContent = String(e);
+    failed(sub, 'start_day', e, { at: null, date: viewDate });
   }
 });
 
@@ -891,7 +974,7 @@ async function openHistory(month) {
     viewMonth = data.month ?? viewMonth;
     renderMonth(data);
   } catch (e) {
-    historyTitle.textContent = String(e).replace(/^Error:\s*/, '');
+    failed(historyTitle, 'fetch_month', e, { month: viewMonth });
   }
 
   fit(true);

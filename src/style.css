@@ -206,7 +206,7 @@ body {
   background: var(--paper-raised);
   border: 1px solid var(--rule);
   border-bottom: 0;
-  border-radius: 13px 13px 0 0;
+  border-radius: 0;
   padding: 12px 14px;
   margin-bottom: -1px;
   /* Not flex: 1. Stretching to fill the window means the page can never
@@ -329,7 +329,7 @@ body {
   background: var(--paper-raised);
   border: 1px solid var(--rule);
   border-bottom: 0;
-  border-radius: 13px 13px 0 0;
+  border-radius: 0;
   padding: 12px 14px 14px;
   flex: none;
 }
@@ -526,3 +526,38 @@ body {
    Kaizen only reports gaps up to now, so the rest of the day is covered
    rather than left looking unaccounted for. */
 .seg.notyet { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+
+/* ── One shape, not a pile ───────────────────────────────
+   The panels and the card are separate boxes stacked edge to edge, so each
+   one rounding its own corners left a notch at both ends of every seam. Which
+   panel is on top changes with what is open, and CSS cannot select "the first
+   visible sibling", so the page marks it: only the topmost visible panel
+   rounds its top, only the card rounds its bottom, and everything between is
+   square. The result reads as one card that grew, which is what it is. */
+.stack-top {
+  border-top-left-radius: 13px;
+  border-top-right-radius: 13px;
+}
+
+.andon.stacked {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* ── Errors you can hand over ────────────────────────────
+   A message the user can read is not a message a developer can act on, so
+   every failure carries a word that copies the long version. */
+.copy-error {
+  font: inherit;
+  font-size: inherit;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.copy-error:hover { color: var(--vermilion); }
+
+.sub.bad, #sub.bad { color: var(--vermilion); }

@@ -98,6 +98,12 @@ const bridge = (config, day, connectError) => `
         if (cmd === 'fetch_day') return { local_time: '14:20', ...${JSON.stringify(day)} };
         if (cmd === 'fetch_prompt') return { prompt: 'x', bootstrap: false };
         if (cmd === 'connect' && ${JSON.stringify(connectError)}) throw new Error(${JSON.stringify(connectError)});
+        if (cmd === 'diagnostics') return {
+          version: '0.2.1', os: 'windows', arch: 'x86_64',
+          server: 'https://kaizen.example.com', connected: true,
+          token_store: 'Windows Credential Manager',
+        };
+        if (cmd === 'start_day' && window.__refuseStart) throw new Error(window.__refuseStart);
         if (cmd === 'fetch_month') return window.__month;
         if (cmd === 'save_entries') {
           if (window.__refuse) throw new Error(window.__refuse);
@@ -473,4 +479,76 @@ test('time that has not happened is covered, not left looking like a hole', asyn
   await page.locator('.tile[data-date="2026-08-14"]').click();
   await expect(page.locator('#banner')).toBeVisible();
   await expect(page.locator('#track .seg.notyet')).toHaveCount(0);
+});
+
+test('a failure can be copied and carries what a developer needs', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED,
+    { ledgers: [LEDGER({ started_at: null, entries: [], gaps: [], work_minutes: 0, gap_minutes: 0 })] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+
+  await page.evaluate(() => {
+    window.__refuseStart = 'Kaizen answered something unexpected: error decoding response body';
+  });
+
+  await open(page);
+  await page.locator('#startBtn').click();
+  await expect(page.locator('#sub')).toContainText('error decoding response body');
+
+  await page.locator('#sub .copy-error').click();
+  await expect(page.locator('#sub .copy-error')).toContainText('send it to the developer');
+
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  for (const needle of ['start_day', 'error decoding response body', '0.2.1',
+                        'windows', 'kaizen.example.com', 'Credential Manager', 'Arguments']) {
+    expect(copied, `the report must name ${needle}`).toContain(needle);
+  }
+});
+
+test('the stack reads as one card, not a pile of rounded boxes', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  // Closed, the card is the whole thing and rounds all four corners.
+  let corners = await page.evaluate(() => {
+    const s = getComputedStyle(document.getElementById('card'));
+    return [s.borderTopLeftRadius, s.borderBottomLeftRadius];
+  });
+  expect(corners[0]).not.toBe('0px');
+
+  await open(page);
+
+  // Open, the ledger is on top and the card is the bottom of one shape.
+  corners = await page.evaluate(() => {
+    const card = getComputedStyle(document.getElementById('card'));
+    const slab = getComputedStyle(document.getElementById('slab'));
+    return {
+      cardTop: card.borderTopLeftRadius, cardBottom: card.borderBottomLeftRadius,
+      slabTop: slab.borderTopLeftRadius, slabBottom: slab.borderBottomLeftRadius,
+    };
+  });
+  expect(corners.cardTop, 'no notch where the ledger meets the card').toBe('0px');
+  expect(corners.cardBottom).not.toBe('0px');
+  expect(corners.slabTop, 'the topmost panel rounds the top').not.toBe('0px');
+  expect(corners.slabBottom).toBe('0px');
+
+  // With the banner between them, only the ledger still rounds the top.
+  await page.locator('#historyBtn').click();
+  await page.locator('.tile[data-date="2026-08-14"]').click();
+  await expect(page.locator('#banner')).toBeVisible();
+
+  const withBanner = await page.evaluate(() => ({
+    slab: getComputedStyle(document.getElementById('slab')).borderTopLeftRadius,
+    banner: getComputedStyle(document.getElementById('banner')).borderTopLeftRadius,
+    card: getComputedStyle(document.getElementById('card')).borderTopLeftRadius,
+  }));
+  expect(withBanner.slab).not.toBe('0px');
+  expect(withBanner.banner, 'nothing in the middle rounds anything').toBe('0px');
+  expect(withBanner.card).toBe('0px');
+
+  await page.screenshot({ path: 'state-corners.png' });
 });
