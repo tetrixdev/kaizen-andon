@@ -460,7 +460,7 @@ function contentHeight() {
   // the window is sized to its content, so unless its height is counted there
   // is nowhere above the card for it to open into, and it flips downward past
   // the bottom edge where it is simply cut off.
-  const floating = pop.hidden ? 0 : popReserve;
+  const floating = reserving ? POP_ROOM : 0;
 
   // Which panel is on top changes with what is open, and the stack has to read
   // as one card rather than a pile of separately rounded boxes.
@@ -601,6 +601,8 @@ new ResizeObserver(() => {
 function toggle() {
   closePop();
 
+  reserving = false;
+
   return swap(() => {
     expanded = !expanded;
     card.classList.toggle('open', expanded);
@@ -624,6 +626,42 @@ function showSetup(show) {
   fit(true);
 }
 
+
+/**
+ * Entering the card takes the room; leaving gives it back, but not at once.
+ *
+ * The delay is the whole point. Taking the room resizes the window, and a
+ * window that changes size under a cursor can make the cursor look like it
+ * left: one stale hit-test and the room is given back, the window shrinks, the
+ * cursor is over the card again, and it starts over. That loop is what made
+ * hovering jump, and it does not need a bug to start it, only a frame in which
+ * the pointer and the layout disagree.
+ *
+ * Holding the room for a moment makes a spurious leave cost nothing: the
+ * cursor is back long before the timer, and the window never moves.
+ */
+const HOLD = 260;
+let releasing = null;
+
+card.addEventListener('mouseenter', () => {
+  clearTimeout(releasing);
+  if (expanded || reserving) return;
+
+  reserving = true;
+  fit(true);
+});
+
+card.addEventListener('mouseleave', () => {
+  clearTimeout(releasing);
+
+  releasing = setTimeout(() => {
+    if (!reserving) return;
+
+    reserving = false;
+    closePop();
+    fit(true);
+  }, HOLD);
+});
 
 sub.addEventListener('click', (event) => {
   const amend = event.target.closest('.amend');
@@ -836,8 +874,22 @@ function showPop(target, kind, index) {
   reveal();
 }
 
-/** Room kept above the card for the detail card, in pixels. */
-let popReserve = 0;
+/**
+ * Room kept above the card for a segment's detail card.
+ *
+ * Taken when the cursor ENTERS THE CARD, before any detail card exists, and
+ * given back when it leaves. Not when the detail card appears, which is what
+ * it used to be and which fed back on itself: showing it resized the window,
+ * the resize moved the strip out from under the cursor, the cursor left the
+ * strip, the card closed, the window shrank, the cursor landed on the strip
+ * again. Fourteen resizes to cross the day once.
+ *
+ * Fixed rather than measured, so moving between blocks never changes the
+ * window at all. A hundred and fifty holds five lines; the card is capped to
+ * match so it can never want more than has been set aside.
+ */
+const POP_ROOM = 150;
+let reserving = false;
 let revealing = 0;
 
 /**
@@ -860,13 +912,9 @@ async function reveal() {
   pop.style.visibility = 'hidden';
   pop.hidden = false;
 
-  const needed = Math.ceil(pop.getBoundingClientRect().height) + 10;
-
-  if (needed > popReserve) {
-    popReserve = needed;
-    await resize();
-    if (mine !== revealing || pop.hidden) return;
-  }
+  // The room is already there, so nothing is resized and nothing moves. All
+  // that is left is to put it in the right place before it is painted.
+  if (mine !== revealing || pop.hidden) return;
 
   placePop();
   pop.style.visibility = '';
@@ -908,8 +956,6 @@ function closePop() {
   pop.hidden = true;
   pop.style.visibility = '';
   popKey = null;
-  popReserve = 0;
-  fit(true);
 }
 
 /**
@@ -938,14 +984,20 @@ track.addEventListener('mouseover', (event) => {
   const seg = event.target.closest('.seg[data-kind]');
   if (!seg) return;
 
+  clearTimeout(dropping);
   unlight();
   twinned(seg.dataset.kind, seg.dataset.index, true);
   showPop(seg, seg.dataset.kind, Number(seg.dataset.index));
 });
 
+let dropping = null;
+
 track.addEventListener('mouseleave', () => {
-  unlight();
-  closePop();
+  clearTimeout(dropping);
+  dropping = setTimeout(() => {
+    unlight();
+    closePop();
+  }, 120);
 });
 
 // Open, the strip is the same control as the rows above it: a block opens what

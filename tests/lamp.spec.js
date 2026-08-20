@@ -1069,10 +1069,11 @@ test('the rows read in clock order, holes among the entries', async ({ page }) =
   await expect(page.locator('#editFrom'), 'the first row is the first hole').toHaveValue('08:47');
 });
 
-test('the segment card opens upward, and the window makes room for it', async ({ page }) => {
+test('the segment card opens upward, into room taken beforehand', async ({ page }) => {
   // The widget lives in the bottom-right corner, so downward is off the edge
-  // of the screen. It used to flip down because the window, being sized to its
-  // content, had nothing above the track to open into.
+  // of the screen. The room is taken when the cursor enters the CARD, before
+  // any detail card exists: taking it when the card appeared meant the resize
+  // moved the strip out from under the cursor and the whole thing flapped.
   await page.setViewportSize({ width: 292, height: 88 });
   await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
   await page.goto(PAGE);
@@ -1081,24 +1082,20 @@ test('the segment card opens upward, and the window makes room for it', async ({
   const before = await page.evaluate(() =>
     window.__calls.filter(([c]) => c === 'place_window').pop()[1].height);
 
-  // Held at a generous size for the hover itself. A real window grows UPWARD,
-  // keeping its bottom edge, so the block stays under the cursor; resizing the
-  // viewport here would move it away and the hover would end, which is the
-  // harness's limitation and not the app's.
-  await page.setViewportSize({ width: 292, height: before + 260 });
+  await page.locator('#delta').hover();
+  await page.waitForTimeout(80);
+  const reserved = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'place_window').pop()[1].height);
+  expect(reserved, 'entering the card takes the room').toBeGreaterThan(before);
+
+  await page.setViewportSize({ width: 292, height: reserved });
   await page.locator('#track .seg.work').first().hover();
   await expect(page.locator('#pop')).toBeVisible();
 
+  // Showing it costs no further resize: the room was already there.
   const after = await page.evaluate(() =>
     window.__calls.filter(([c]) => c === 'place_window').pop()[1].height);
-  expect(after, 'the window grows to hold the card').toBeGreaterThan(before);
-
-  // And it asks once: a card that grew the window, lost the cursor and shrank
-  // again would flicker for as long as you hovered it.
-  const asks = await page.evaluate(() => window.__calls.filter(([c]) => c === 'place_window').length);
-  await page.waitForTimeout(400);
-  const later = await page.evaluate(() => window.__calls.filter(([c]) => c === 'place_window').length);
-  expect(later, 'no resize loop while hovering').toBe(asks);
+  expect(after).toBe(reserved);
 
   const geom = await page.evaluate(() => {
     const pop = document.getElementById('pop').getBoundingClientRect();
@@ -1111,14 +1108,6 @@ test('the segment card opens upward, and the window makes room for it', async ({
   expect(geom.popTop, 'and inside the window').toBeGreaterThanOrEqual(0);
   expect(geom.popLeft).toBeGreaterThanOrEqual(0);
   expect(geom.popRight, 'pulled back inside the right edge').toBeLessThanOrEqual(geom.view);
-
-  // Moving off it gives the room back.
-  await page.locator('#delta').hover();
-  await expect(page.locator('#pop')).toBeHidden();
-  await page.waitForTimeout(120);
-  const closed = await page.evaluate(() =>
-    window.__calls.filter(([c]) => c === 'place_window').pop()[1].height);
-  expect(closed).toBe(before);
 });
 
 test('opening fades out and back in, with the resize hidden inside it', async ({ page }) => {
@@ -1205,4 +1194,79 @@ test('sliding along the strip does not resize the window each time', async ({ pa
     await page.waitForTimeout(80);
   }
   expect(await asks(), 'going back over the same blocks costs nothing').toBe(settled);
+});
+
+test('sliding across the strip moves nothing and resizes once', async ({ page }) => {
+  // Written after watching it, frame by frame, rather than reasoning about it.
+  // Making room for the detail card resized the window; the resize moved the
+  // strip relative to the cursor; the cursor left the strip; the card closed;
+  // the window shrank; the cursor was back on the strip. Fourteen resizes and
+  // five different card positions to cross the day once.
+  //
+  // The harness has to be honest about two things or it cannot see this: a
+  // real window grows UPWARD keeping its bottom edge, so the fixed point on
+  // screen is the distance from the bottom of the viewport; and the resize
+  // arrives a frame or two AFTER the app asks for it.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.addInitScript(`
+    addEventListener('DOMContentLoaded', () => {
+      window.__frames = [];
+      const tick = () => {
+        const card = document.getElementById('card');
+        const pop = document.getElementById('pop');
+        if (card) {
+          const c = card.getBoundingClientRect();
+          const shown = !pop.hidden && getComputedStyle(pop).visibility !== 'hidden';
+          window.__frames.push({
+            cardUp: Math.round(innerHeight - c.bottom),
+            popUp: shown ? Math.round(innerHeight - pop.getBoundingClientRect().bottom) : null,
+          });
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+  `);
+  await page.goto(PAGE);
+
+  let stop = false;
+  let height = 88;
+  const os = (async () => {
+    while (!stop) {
+      const want = await page.evaluate(() => {
+        const all = window.__calls.filter(([c]) => c === 'place_window');
+        return all.length ? all[all.length - 1][1] : null;
+      });
+      if (want && want.height !== height) {
+        await page.waitForTimeout(24);
+        height = want.height;
+        await page.setViewportSize({ width: want.expanded ? 1222 : 332, height });
+      }
+      await page.waitForTimeout(12);
+    }
+  })();
+
+  await page.waitForTimeout(400);
+  await page.evaluate(() => { window.__frames = []; window.__calls.length = 0; });
+
+  for (let i = 0; i <= 16; i += 1) {
+    const strip = await page.locator('#track').boundingBox();
+    await page.mouse.move(strip.x + (strip.width * i) / 16, strip.y + strip.height / 2);
+    await page.waitForTimeout(45);
+  }
+  await page.waitForTimeout(250);
+  stop = true;
+  await os;
+
+  const frames = await page.evaluate(() => window.__frames);
+  const cardAt = [...new Set(frames.map((f) => f.cardUp))];
+  const popAt = [...new Set(frames.filter((f) => f.popUp !== null).map((f) => f.popUp))];
+  const resizes = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'place_window').length);
+
+  expect(frames.length, 'frames were recorded').toBeGreaterThan(30);
+  expect(cardAt, 'the card holds one place on screen').toHaveLength(1);
+  expect(popAt.length, 'so does the detail card').toBeLessThanOrEqual(2);
+  expect(resizes, 'the room is taken once, not once per block').toBeLessThanOrEqual(2);
 });

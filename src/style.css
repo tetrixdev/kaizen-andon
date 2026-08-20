@@ -570,6 +570,10 @@ body {
   pointer-events: none;
   min-width: 190px;
   max-width: 320px;
+  /* Capped to the room set aside for it, so it can never ask for more than
+     the window has already made. */
+  max-height: 140px;
+  overflow: hidden;
   background: var(--paper-raised);
   border: 1px solid var(--rule);
   border-radius: 10px;
