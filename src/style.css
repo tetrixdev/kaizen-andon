@@ -566,3 +566,39 @@ body {
    through this same panel so they get the same times, the same validation and
    the same refusals, rather than a second little form that drifts from it. */
 .editor.moment .span-only { display: none; }
+
+/* ── What is clickable should look clickable ─────────────
+   The whole card opens and closes, every segment and every row opens what it
+   describes, and the day's stamps amend themselves. None of that said so: the
+   buttons had a pointer and the larger, more useful targets around them did
+   not, which reads as the buttons being the only way in. */
+.andon { cursor: pointer; }
+.seg[data-kind] { cursor: pointer; }
+.erow[data-kind] { cursor: pointer; }
+.erow[data-kind]:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+
+/* The stamps are the control for the stamps: "started 08:47" is the thing you
+   want to correct, so it is the thing you click. */
+.amend {
+  font: inherit;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.amend:hover { color: var(--ink); text-decoration-style: solid; }
+
+/* A URL is longer than anything else in this panel and was getting half a row
+   while a two-word description got two columns. */
+.fld-full { grid-column: 1 / -1; }
+
+/* Closed, the card is one big button and this line is clipped to one row, so
+   a live target inside it would be a hole in the click area when it fits and
+   unreachable when it does not. Open, there is room and the whole line reads. */
+.andon:not(.open) .amend {
+  pointer-events: none;
+  text-decoration: none;
+}

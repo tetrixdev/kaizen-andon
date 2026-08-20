@@ -611,3 +611,92 @@ test('a refused moment is shown, with the copy word', async ({ page }) => {
   await expect(page.locator('#editorNote .copy-error')).toBeVisible();
   await expect(page.locator('#editor'), 'a refusal leaves the panel open to fix').toBeVisible();
 });
+
+test('the stamps are the control for the stamps', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED,
+    { ledgers: [LEDGER({ ended_at: '17:05' })] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  // Closed, the card is one big button and the stamp must not punch a hole in
+  // it: clicking there opens the bar like anywhere else does.
+  expect(await page.evaluate(() =>
+    getComputedStyle(document.querySelector('#sub .amend')).pointerEvents)).toBe('none');
+
+  await open(page);
+
+  // Open, both stamps are reachable while set, which is when they are wrong.
+  await expect(page.locator('#sub .amend[data-mode="start"]')).toContainText('started 08:34');
+  await expect(page.locator('#sub .amend[data-mode="end"]')).toContainText('ended 17:05');
+
+  await page.locator('#sub .amend[data-mode="start"]').click();
+  await expect(page.locator('#editorTitle')).toContainText('start');
+  await expect(page.locator('#editFrom'), 'it opens on the time already set').toHaveValue('08:34');
+
+  await page.locator('#editFrom').fill('08:15');
+  await page.locator('#editorSave').click();
+  const sent = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'start_day').pop()[1]);
+  expect(sent.at).toBe('08:15');
+
+  // Amending must not also collapse the bar behind the panel.
+  expect(await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'place_window').pop()[1].expanded)).toBe(true);
+});
+
+test('everything that can be clicked says so', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+
+  const cursors = await page.evaluate(() => {
+    const at = (sel) => {
+      const el = document.querySelector(sel);
+      return el ? getComputedStyle(el).cursor : 'missing';
+    };
+    return {
+      card: at('#card'),
+      workSeg: at('#track .seg.work'),
+      gapSeg: at('#track .seg.gap'),
+      entryRow: at('.erow[data-kind="entry"]'),
+      gapRow: at('.erow[data-kind="gap"]'),
+      stamp: at('#sub .amend'),
+    };
+  });
+
+  for (const key of ['card', 'workSeg', 'gapSeg', 'entryRow', 'gapRow', 'stamp']) {
+    expect(cursors[key], `${key} opens something, so it must look like it does`).toBe('pointer');
+  }
+});
+
+test('a gap row does not repeat itself', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+
+  const row = page.locator('.erow[data-kind="gap"]');
+  await expect(row).toContainText('Unaccounted');
+  await expect(row.locator('.pill'), 'the row already says it, and it is clickable').toHaveCount(0);
+});
+
+test('the link field gets a whole row, being the longest thing here', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+  await page.locator('#addBtn').click();
+
+  const widths = await page.evaluate(() => ({
+    link: document.getElementById('editLink').getBoundingClientRect().width,
+    what: document.getElementById('editWhat').getBoundingClientRect().width,
+    grid: document.querySelector('.editor-grid').getBoundingClientRect().width,
+  }));
+  expect(widths.link).toBeGreaterThan(widths.what);
+  expect(widths.link / widths.grid, 'a URL gets the full row').toBeGreaterThan(0.9);
+});

@@ -193,7 +193,6 @@ function renderEntries(l) {
       <span class="e-time">${esc(g.from)}–${esc(g.to)}</span>
       <span class="e-dur">${hhmm(g.minutes)}</span>
       <span class="e-what">Unaccounted</span>
-      <span class="pill open">open</span>
     </div>`);
   }
 
@@ -226,12 +225,23 @@ function render(l) {
     deltaLabel.textContent = 'accounted for';
   }
 
-  const bits = [l.context];
+  // The stamps are the way to change the stamps. A day's start is wrong more
+  // often than it is missing, because it is set from memory, and hunting for a
+  // button that only exists before it is set is the wrong shape: the thing to
+  // correct is right there on screen, saying the wrong time.
+  // The stamps are live only on the open bar, and the stylesheet enforces it.
+  // Closed, this line truncates and the card is one big button, so a live
+  // target sitting in the middle of it would be both unreachable when clipped
+  // and a hole in the click area when not. Opening is the natural first step
+  // anyway: you cannot read a time you want to correct until you can see it.
+  const bits = [esc(l.context)];
   if (l.target_minutes) bits.push(`${hhmm(l.work_minutes)} of ${hhmm(l.target_minutes)} logged`);
-  if (l.started_at) bits.push(`started ${l.started_at}`);
+  if (l.started_at) bits.push(`<button type="button" class="amend" data-mode="start">started ${esc(l.started_at)}</button>`);
+  if (l.ended_at) bits.push(`<button type="button" class="amend" data-mode="end">ended ${esc(l.ended_at)}</button>`);
+
   // A fresh reading replaces a failure, so the red must go with it.
   sub.classList.remove('bad');
-  sub.textContent = bits.join(' · ');
+  sub.innerHTML = bits.join(' · ');
 
   renderTrack(l);
   renderEntries(l);
@@ -389,6 +399,7 @@ for (const panel of [slab, setup, card]) sizes.observe(panel);
 function toggle() {
   expanded = !expanded;
   actions.hidden = !expanded;
+  card.classList.toggle('open', expanded);
 
   // Collapsing puts everything away: the editor and the grid only make sense
   // beside the rows they belong to.
@@ -408,8 +419,16 @@ function showSetup(show) {
 }
 
 
+sub.addEventListener('click', (event) => {
+  const amend = event.target.closest('.amend');
+  if (!amend) return;
+
+  event.stopPropagation();
+  openEditor({ mode: amend.dataset.mode });
+});
+
 card.addEventListener('click', (event) => {
-  if (event.target.closest('.btn') || event.target.closest('.seg') || setup.hidden === false) return;
+  if (event.target.closest('.btn, .seg, .amend') || setup.hidden === false) return;
   toggle();
 });
 
