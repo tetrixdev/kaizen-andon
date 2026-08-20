@@ -94,6 +94,10 @@ const bridge = (config, day, connectError) => `
     core: {
       invoke: async (cmd, args) => {
         window.__calls.push([cmd, args]);
+        if (cmd === 'place_window') {
+          const el = document.getElementById('stack');
+          (window.__opacity = window.__opacity || []).push(el ? Number(getComputedStyle(el).opacity) : 1);
+        }
         if (cmd === 'load_config') return ${JSON.stringify(config)};
         if (cmd === 'fetch_day') return { local_time: '14:20', ...${JSON.stringify(day)} };
         if (cmd === 'fetch_prompt') return { prompt: 'x', bootstrap: false };
@@ -543,6 +547,8 @@ test('the bar still holds together on a narrow screen', async ({ page }) => {
   await settle(page);
 
   await page.locator('#card').click({ position: { x: 140, y: 40 } });
+  await page.waitForFunction(() =>
+    window.__calls.filter(([c]) => c === 'place_window').pop()[1].expanded === true);
   const asked = await page.evaluate(() =>
     window.__calls.filter(([c]) => c === 'place_window').pop()[1]);
   await page.setViewportSize({ width: 976, height: asked.height });
@@ -1113,4 +1119,41 @@ test('the segment card opens upward, and the window makes room for it', async ({
   const closed = await page.evaluate(() =>
     window.__calls.filter(([c]) => c === 'place_window').pop()[1].height);
   expect(closed).toBe(before);
+});
+
+test('opening fades out and back in, with the resize hidden inside it', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  await page.locator('#card').click({ position: { x: 140, y: 40 } });
+  await page.waitForFunction(() =>
+    window.__calls.filter(([c]) => c === 'place_window').pop()[1].expanded === true);
+
+  // The first reading is the boot placement, which happens in plain sight.
+  const seen = await page.evaluate(() => window.__opacity);
+  expect(seen.length, 'the window was asked to move').toBeGreaterThan(1);
+  expect(seen[0], 'the first placement is not a swap').toBe(1);
+  expect(seen[seen.length - 1], 'nothing was visible while it opened').toBeLessThan(0.05);
+
+  // It comes back.
+  await expect
+    .poll(async () => page.evaluate(() =>
+      Number(getComputedStyle(document.getElementById('stack')).opacity)))
+    .toBe(1);
+
+  const timing = await page.evaluate(() => {
+    const el = document.getElementById('stack');
+    const out = getComputedStyle(el);
+    el.classList.add('swapping');
+    const during = getComputedStyle(el).transitionDuration;
+    el.classList.remove('swapping');
+    return { back: out.transitionDuration, away: during, easing: out.transitionTimingFunction };
+  });
+
+  // Out faster than in, and linear, which is what a fade wants.
+  expect(timing.away).toBe('0.09s');
+  expect(timing.back).toBe('0.13s');
+  expect(timing.easing).toBe('linear');
 });

@@ -771,3 +771,16 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .slab, .editor, .history, .banner { animation: none; }
 }
+
+/* The card fades out, is rearranged and resized while nothing can be seen of
+   it, and fades back in already at its new size. Opening cannot be done as a
+   single window operation, so this is what hides the seam.
+   Linear, because a curve on an opacity change reads as a stutter, and out
+   faster than in, which is what makes it feel like a response rather than a
+   transition. */
+.stack { transition: opacity 130ms linear; }
+.stack.swapping { opacity: 0; transition-duration: 90ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .stack { transition: none; }
+}

@@ -105,28 +105,15 @@ fn place_window(window: WebviewWindow, expanded: bool, height: Option<i32>) -> R
     // Position first, so the jump is upward. A card that hops up and settles
     // reads as opening; one that drops and climbs back reads as a glitch.
     //
-    // For the big change, where the width moves too, one frame of it is
-    // unmistakable, so the window is taken off screen for the swap instead.
-    let swap = window
-        .outer_size()
-        .map(|size| size.width != width as u32)
-        .unwrap_or(false)
-        && window.is_visible().unwrap_or(true);
-
-    if swap {
-        let _ = window.hide();
-    }
-
+    // For the big change the page fades itself out first and back in after, so
+    // the half-changed frame happens while there is nothing to see. Hiding the
+    // window here instead would fight that: it would vanish mid-fade.
     window
         .set_position(PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())?;
     window
         .set_size(PhysicalSize::new(width as u32, height as u32))
         .map_err(|e| e.to_string())?;
-
-    if swap {
-        let _ = window.show();
-    }
 
     Ok(())
 }

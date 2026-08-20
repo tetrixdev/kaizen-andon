@@ -484,24 +484,65 @@ function contentHeight() {
  * two changes that must not become two resizes. `force` is for the case where
  * the height is unchanged but the WIDTH is not, which is opening and closing.
  */
+/** Measure and ask, without coalescing: the caller has already decided. */
+async function resize() {
+  lastHeight = contentHeight();
+
+  try {
+    await invoke('place_window', { expanded, height: lastHeight });
+  } catch (e) {
+    console.error('place_window failed', e);
+  }
+
+  placePop();
+}
+
 function fit(force = false) {
   if (queued) return;
   queued = true;
 
   requestAnimationFrame(async () => {
     queued = false;
-    const height = contentHeight();
-    if (height === lastHeight && !force) return;
-    lastHeight = height;
+    if (contentHeight() === lastHeight && !force) return;
 
-    try {
-      await invoke('place_window', { expanded, height });
-    } catch (e) {
-      console.error('place_window failed', e);
-    }
-
-    placePop();
+    await resize();
   });
+}
+
+// Out faster than in, and linear: a curve on an opacity change reads as a
+// stutter. A tenth of a second each way is where every house style lands for
+// something this small, and the whole swap stays far under the point at which
+// a transition starts to feel like waiting.
+const FADE_OUT = 90;
+const pause = (ms) => new Promise((done) => setTimeout(done, ms));
+
+/**
+ * Change what the card is showing, across a fade.
+ *
+ * Opening both moves and resizes the window, and those cannot be done as one
+ * operation, so some frame always shows it half-changed. Rather than trying to
+ * make that frame right, the page stops being visible for it: fade out,
+ * rearrange and resize, fade back in with everything already in place.
+ */
+async function swap(change) {
+  const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+  if (still) {
+    change();
+
+    return resize();
+  }
+
+  stack.classList.add('swapping');
+  await pause(FADE_OUT);
+
+  change();
+  await resize();
+
+  // One frame at the new size before fading back, so nothing is ever seen
+  // arriving at the wrong dimensions.
+  await new Promise(requestAnimationFrame);
+  stack.classList.remove('swapping');
 }
 
 // Any panel changing size for any reason resizes the window. This is what
@@ -531,22 +572,24 @@ new ResizeObserver(() => {
 }).observe(track);
 
 function toggle() {
-  expanded = !expanded;
-  card.classList.toggle('open', expanded);
-
-  // Collapsing puts everything away: the editor and the grid only make sense
-  // beside the rows they belong to.
   closePop();
-  if (!expanded) {
-    editor.hidden = true;
-    history.hidden = true;
-  }
-  slab.hidden = !expanded || !editor.hidden || !history.hidden;
 
-  // The timeline is drawn differently open than closed, so it is redrawn
-  // rather than merely restyled: labels only exist where there is room.
-  if (ledger) renderTrack(ledger);
-  fit(true);
+  return swap(() => {
+    expanded = !expanded;
+    card.classList.toggle('open', expanded);
+
+    // Collapsing puts everything away: the editor and the grid only make sense
+    // beside the rows they belong to.
+    if (!expanded) {
+      editor.hidden = true;
+      history.hidden = true;
+    }
+    slab.hidden = !expanded || !editor.hidden || !history.hidden;
+
+    // The timeline is drawn differently open than closed, so it is redrawn
+    // rather than merely restyled: labels only exist where there is room.
+    if (ledger) renderTrack(ledger);
+  });
 }
 
 function showSetup(show) {
