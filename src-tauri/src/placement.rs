@@ -10,11 +10,25 @@
 //! widgets; the number comes from precedent (Windows' own toasts sit 12 to 16
 //! inside the work area, macOS notifications about 20).
 
-/// Margin from the work area's edges, in logical pixels.
+/// Margin from the work area's edges to the CARD, in logical pixels.
 pub const MARGIN: i32 = 24;
 
-/// The widest the expanded bar is ever drawn.
+/// The widest the expanded card is ever drawn.
 pub const MAX_WIDTH: i32 = 1222;
+
+/// Room inside the window, on every side, for the drop shadow and the
+/// call-state ring to fade out.
+///
+/// The window is sized to its content and the page is transparent, so without
+/// this the shadow is sliced off square at the window edge: the card looks
+/// like it has grey corners rather than a soft one. It is counted twice into
+/// the window's size and subtracted once from the margin, so the CARD still
+/// lands `MARGIN` from the edge of the work area.
+pub const SHADOW_ROOM: i32 = 20;
+
+/// The margin from the work area to the WINDOW, which sits further out than
+/// the card by exactly the room the shadow needs.
+pub const WINDOW_MARGIN: i32 = MARGIN - SHADOW_ROOM;
 
 /// A rectangle in physical pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,7 +97,7 @@ pub fn work_area() -> Option<Rect> {
 /// Compact and expanded share this anchor, so opening grows the card up and to
 /// the left and the lamp itself never moves.
 pub fn anchor(area: Rect, width: i32, height: i32, scale: f64) -> (i32, i32) {
-    let margin = (MARGIN as f64 * scale).round() as i32;
+    let margin = (WINDOW_MARGIN as f64 * scale).round() as i32;
     let x = area.right - margin - width;
     let y = area.bottom - margin - height;
 
@@ -92,8 +106,8 @@ pub fn anchor(area: Rect, width: i32, height: i32, scale: f64) -> (i32, i32) {
 
 /// The bar is capped to what actually fits: 1222 does not go on a 1366 laptop.
 pub fn expanded_width(area: Rect, scale: f64) -> i32 {
-    let margin = (MARGIN as f64 * scale).round() as i32;
-    let max = (MAX_WIDTH as f64 * scale).round() as i32;
+    let margin = (WINDOW_MARGIN as f64 * scale).round() as i32;
+    let max = ((MAX_WIDTH + SHADOW_ROOM * 2) as f64 * scale).round() as i32;
 
     max.min(area.width() - margin * 2)
 }
@@ -114,10 +128,13 @@ mod tests {
 
     #[test]
     fn anchors_to_the_bottom_right_inside_the_margin() {
-        let (x, y) = anchor(full_hd(), 292, 76, 1.0);
+        // The WINDOW sits WINDOW_MARGIN from the edge, which puts the card
+        // itself MARGIN from it: the difference is the room the shadow needs
+        // to fade out inside a transparent, content-sized window.
+        let (x, y) = anchor(full_hd(), 292 + SHADOW_ROOM * 2, 76, 1.0);
 
-        assert_eq!(x, 1920 - 24 - 292);
-        assert_eq!(y, 1032 - 24 - 76);
+        assert_eq!(x + SHADOW_ROOM, 1920 - MARGIN - 292, "the card, not the window");
+        assert_eq!(y, 1032 - WINDOW_MARGIN - 76);
     }
 
     #[test]
@@ -141,17 +158,17 @@ mod tests {
             right: 1920,
             bottom: 1032,
         };
-        assert_eq!(expanded_width(wide, 1.0), 1222);
+        assert_eq!(expanded_width(wide, 1.0), 1222 + SHADOW_ROOM * 2);
 
-        // 1222 plus two margins is 1270, so a 1366 laptop still takes the full
-        // width. The cap only bites below that.
+        // The card is 1222 and the window is that plus the shadow's room, so a
+        // 1366 laptop still takes the full width. The cap only bites below.
         let laptop = Rect {
             left: 0,
             top: 0,
             right: 1366,
             bottom: 728,
         };
-        assert_eq!(expanded_width(laptop, 1.0), 1222);
+        assert_eq!(expanded_width(laptop, 1.0), 1222 + SHADOW_ROOM * 2);
 
         let narrow = Rect {
             left: 0,
@@ -159,7 +176,7 @@ mod tests {
             right: 1024,
             bottom: 728,
         };
-        assert_eq!(expanded_width(narrow, 1.0), 1024 - 48);
+        assert_eq!(expanded_width(narrow, 1.0), 1024 - WINDOW_MARGIN * 2);
     }
 
     #[test]
@@ -171,9 +188,10 @@ mod tests {
             bottom: 1548,
         };
         let (x, y) = anchor(area, 438, 114, 1.5);
+        let margin = (WINDOW_MARGIN as f64 * 1.5).round() as i32;
 
-        assert_eq!(x, 2880 - 36 - 438);
-        assert_eq!(y, 1548 - 36 - 114);
+        assert_eq!(x, 2880 - margin - 438);
+        assert_eq!(y, 1548 - margin - 114);
     }
 
     #[test]

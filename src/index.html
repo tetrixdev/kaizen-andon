@@ -102,7 +102,10 @@
   </div>
 
   <!-- The card. The whole thing is one button. -->
-  <div class="andon lit-wait" id="card" data-tauri-drag-region>
+  <!-- No state class here. It lives on the stack, and a leftover lit-wait on
+       the card outranked it for everything inside: --lamp came from the nearer
+       ancestor, so the number and the glyph stayed grey in every state. -->
+  <div class="andon" id="card" data-tauri-drag-region>
     <div class="lamp" id="lamp">灯</div>
     <div class="readout">
       <div class="readout-top">

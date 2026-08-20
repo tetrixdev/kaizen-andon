@@ -26,7 +26,8 @@ fn intent_payload(intent: &deeplink::Intent) -> serde_json::Value {
     }
 }
 
-/// Compact card: one glyph, one number, one strip. Readable in a glance.
+/// Compact CARD: one glyph, one number, one strip. Readable in a glance.
+/// The window is this plus the room its shadow needs on either side.
 const COMPACT: (i32, i32) = (292, 88);
 
 /// The shortest window worth drawing, in logical pixels.
@@ -84,7 +85,7 @@ fn place_window(window: WebviewWindow, expanded: bool, height: Option<i32>) -> R
     let width = if expanded {
         placement::expanded_width(area, scale)
     } else {
-        logical(COMPACT.0)
+        logical(COMPACT.0 + placement::SHADOW_ROOM * 2)
     };
 
     // The page has not measured itself yet on the very first call, so the

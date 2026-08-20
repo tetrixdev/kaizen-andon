@@ -810,16 +810,14 @@ test('the glow wraps the whole stack, and breathes rather than blinks', async ({
     return {
       wrapsSlab: stack.top <= box('slab').top + 1,
       wrapsCard: stack.bottom >= box('card').bottom - 1,
-      animates: getComputedStyle(document.getElementById('stack'), '::after').animationName,
+      animates: getComputedStyle(document.getElementById('stack')).animationName,
       lamp: getComputedStyle(document.querySelector('.lamp'), '::after').animationName,
     };
   });
 
   expect(geom.wrapsSlab && geom.wrapsCard, 'the glow follows the whole open shape').toBe(true);
-  // Opacity interpolates; a box-shadow built from color-mix() does not, which
-  // is why this used to snap on and off instead of breathing.
   expect(geom.animates).toBe('breathe');
-  expect(geom.lamp).toBe('breathe');
+  expect(geom.lamp).toBe('glow');
 
   await page.screenshot({ path: 'state-call-open.png' });
 });
@@ -871,4 +869,88 @@ test('a day that is done rests, and stops resting when you open it', async ({ pa
   expect(Number(openOpacity.slab), 'least of all the rows you are reading').toBe(1);
 
   await page.screenshot({ path: 'state-quiet-open.png' });
+});
+
+test('the state colour reaches the number and the glyph', async ({ page }) => {
+  // Asserting the class is on the element is not enough: the class was there,
+  // --lamp resolved to vermilion on the stack, and both the number and the
+  // glyph still painted grey, because a leftover lit-wait on the card was a
+  // nearer ancestor redefining --lamp for everything inside it.
+  const cases = [
+    ['call', '--vermilion'],
+    ['attention', '--ochre'],
+    ['running', '--moss'],
+  ];
+
+  for (const [state, token] of cases) {
+    await page.setViewportSize({ width: 292, height: 88 });
+    await page.addInitScript(bridge(CONNECTED,
+      { ledgers: [LEDGER({ state, gap_minutes: state === 'running' ? 0 : 95 })] }, null));
+    await page.goto(PAGE);
+    await settle(page);
+
+    const seen = await page.evaluate((t) => {
+      const hex = getComputedStyle(document.documentElement).getPropertyValue(t).trim();
+      const probe = document.createElement('span');
+      probe.style.color = hex;
+      document.body.appendChild(probe);
+      const want = getComputedStyle(probe).color;
+      probe.remove();
+      return {
+        want,
+        glyph: getComputedStyle(document.getElementById('lamp')).color,
+        delta: getComputedStyle(document.getElementById('delta')).color,
+      };
+    }, token);
+
+    expect(seen.glyph, `${state}: the glyph carries the state's colour`).toBe(seen.want);
+    if (state !== 'running') {
+      expect(seen.delta, `${state}: so does the number`).toBe(seen.want);
+    }
+  }
+});
+
+test('the ring grows outward rather than fading in place', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER({ state: 'call' })] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  const anim = await page.evaluate(() => ({
+    stack: getComputedStyle(document.getElementById('stack')).animationName,
+    lamp: getComputedStyle(document.querySelector('.lamp'), '::after').animationName,
+  }));
+
+  // The expansion is the character of it: a ring that only faded in place read
+  // as a switch rather than a breath.
+  expect(anim.stack).toBe('breathe');
+  expect(anim.lamp).toBe('glow');
+});
+
+test('the shadow fades out inside the window, not at its edge', async ({ page }) => {
+  // The window is transparent and sized to its content, so anything painted
+  // past the padding is cut off square: the card grows grey corners instead of
+  // soft ones. Whatever the card casts has to land inside.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER({ state: 'call' })] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  const room = await page.evaluate(() => {
+    const s = getComputedStyle(document.body);
+    const stack = document.getElementById('stack').getBoundingClientRect();
+    return {
+      padding: parseFloat(s.paddingTop),
+      left: stack.left,
+      right: window.innerWidth - stack.right,
+      top: stack.top,
+      bottom: window.innerHeight - stack.bottom,
+    };
+  });
+
+  // The ring reaches 9px and the drop shadow about 10px past the edge.
+  for (const side of ['left', 'right', 'top', 'bottom']) {
+    expect(room[side], `${side}: the glow needs somewhere to go`).toBeGreaterThanOrEqual(14);
+  }
+  expect(room.padding).toBeGreaterThanOrEqual(14);
 });

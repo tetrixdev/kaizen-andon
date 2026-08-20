@@ -66,7 +66,11 @@ body {
   flex-direction: column;
   justify-content: flex-end;
   gap: 0;
-  padding: 6px;
+  /* Room for the shadow and the call ring to fade out INSIDE the window. The
+     window is content-sized and the page is transparent, so anything that
+     reaches past this is sliced off square at the window edge and reads as a
+     grey corner rather than a soft one. Kept in step with SHADOW_ROOM. */
+  padding: 20px;
 }
 
 /* ── The card ───────────────────────────────────────────── */
@@ -83,21 +87,6 @@ body {
   flex: none;
   border-radius: 13px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, .1), 0 8px 22px -12px rgba(0, 0, 0, .4);
-}
-
-/* The glow is a layer whose OPACITY animates, not a box-shadow whose colour
-   does. A box-shadow built with color-mix() does not interpolate: the browser
-   steps between the two keyframes instead of blending them, which is why the
-   lamp was snapping on and off rather than breathing. */
-.stack::after {
-  content: '';
-  position: absolute;
-  inset: -2px;
-  border-radius: 15px;
-  pointer-events: none;
-  opacity: 0;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--vermilion) 22%, transparent),
-              0 10px 34px -10px color-mix(in srgb, var(--vermilion) 55%, transparent);
 }
 
 .andon {
@@ -182,18 +171,32 @@ body {
 
 /* The only animation in the whole widget. A thing that moves in the corner of
    your eye all day gets moved off the screen.
-   Both halves animate opacity, which always interpolates, so this reads as a
-   breath rather than a switch. */
-.stack.lit-call::after { animation: breathe 3.6s ease-in-out infinite; }
-.lit-call .lamp::after { animation: breathe 3.6s ease-in-out infinite; }
+   The ring grows outward, 3px to 9px, and thins as it goes: that expansion is
+   the whole character of it. The lamp behind the glyph fades instead, because
+   there is nowhere for a 42px square to expand to. */
+.stack.lit-call { animation: breathe 3.6s ease-in-out infinite; }
+.lit-call .lamp::after { animation: glow 3.6s ease-in-out infinite; }
 
 @keyframes breathe {
-  0%, 100% { opacity: .3; }
+  0%, 100% {
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .1), 0 8px 22px -12px rgba(0, 0, 0, .4),
+                0 0 0 3px color-mix(in srgb, var(--vermilion) 20%, transparent);
+  }
+  50% {
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .1),
+                0 8px 26px -12px color-mix(in srgb, var(--vermilion) 50%, transparent),
+                0 0 0 9px color-mix(in srgb, var(--vermilion) 5%, transparent);
+  }
+}
+
+@keyframes glow {
+  0%, 100% { opacity: .25; }
   50%      { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .stack.lit-call::after, .lit-call .lamp::after { animation: none; opacity: .55; }
+  .stack.lit-call { animation: none; box-shadow: 0 1px 2px rgba(0, 0, 0, .1), 0 8px 22px -12px rgba(0, 0, 0, .4), 0 0 0 3px color-mix(in srgb, var(--vermilion) 22%, transparent); }
+  .lit-call .lamp::after { animation: none; opacity: .5; }
 }
 
 /* ── The strip ──────────────────────────────────────────── */
