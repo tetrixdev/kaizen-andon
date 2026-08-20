@@ -561,3 +561,8 @@ body {
 .copy-error:hover { color: var(--vermilion); }
 
 .sub.bad, #sub.bad { color: var(--vermilion); }
+
+/* Marking a moment is one field, not seven. The day's start and end run
+   through this same panel so they get the same times, the same validation and
+   the same refusals, rather than a second little form that drifts from it. */
+.editor.moment .span-only { display: none; }

@@ -104,6 +104,7 @@ const bridge = (config, day, connectError) => `
           token_store: 'Windows Credential Manager',
         };
         if (cmd === 'start_day' && window.__refuseStart) throw new Error(window.__refuseStart);
+        if (cmd === 'end_day' && window.__refuseEnd) throw new Error(window.__refuseEnd);
         if (cmd === 'fetch_month') return window.__month;
         if (cmd === 'save_entries') {
           if (window.__refuse) throw new Error(window.__refuse);
@@ -408,28 +409,6 @@ test('quick actions fill the span without typing', async ({ page }) => {
   await expect(page.locator('#editTo')).toHaveValue('13:30');
 });
 
-test('a day can be called and reopened from the widget', async ({ page }) => {
-  await page.setViewportSize({ width: 292, height: 88 });
-  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
-  await page.goto(PAGE);
-  await settle(page);
-  await open(page);
-
-  await expect(page.locator('#startBtn')).toBeHidden();
-  await expect(page.locator('#endBtn')).toHaveText('Call it a day');
-
-  // Kaizen answers a write with the new day, so the button turns around.
-  await page.evaluate(() => {
-    window.__after = { local_time: '17:30', ledgers: [{ ...window.__baseLedger, ended_at: '17:30' }] };
-  });
-  await page.locator('#endBtn').click();
-  await expect(page.locator('#endBtn')).toHaveText('Reopen the day');
-
-  const sent = await page.evaluate(() =>
-    window.__calls.filter(([c]) => c === 'end_day').pop()[1]);
-  expect(sent.reopen).toBe(false);
-});
-
 test('the bar still holds together on a narrow screen', async ({ page }) => {
   // The expanded width is min(1222, work area - 48), so a 1024 laptop gets
   // 976 and the actions row has to survive it. The row has grown twice now.
@@ -495,10 +474,11 @@ test('a failure can be copied and carries what a developer needs', async ({ page
 
   await open(page);
   await page.locator('#startBtn').click();
-  await expect(page.locator('#sub')).toContainText('error decoding response body');
+  await page.locator('#editorSave').click();
+  await expect(page.locator('#editorNote')).toContainText('error decoding response body');
 
-  await page.locator('#sub .copy-error').click();
-  await expect(page.locator('#sub .copy-error')).toContainText('send it to the developer');
+  await page.locator('#editorNote .copy-error').click();
+  await expect(page.locator('#editorNote .copy-error')).toContainText('send it to the developer');
 
   const copied = await page.evaluate(() => navigator.clipboard.readText());
   for (const needle of ['start_day', 'error decoding response body', '0.2.1',
@@ -551,4 +531,83 @@ test('the stack reads as one card, not a pile of rounded boxes', async ({ page }
   expect(withBanner.card).toBe('0px');
 
   await page.screenshot({ path: 'state-corners.png' });
+});
+
+test('the day is started at the time you say, not the moment you clicked', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED,
+    { ledgers: [LEDGER({ started_at: null, entries: [], gaps: [], work_minutes: 0, gap_minutes: 0 })] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+
+  await page.locator('#startBtn').click();
+  await expect(page.locator('#editor')).toBeVisible();
+  await expect(page.locator('#editorTitle')).toContainText('start');
+
+  // One field, prefilled with Kaizen's clock; the span fields are gone.
+  await expect(page.locator('#editFrom')).toHaveValue('14:20');
+  await expect(page.locator('#editTo')).toBeHidden();
+  await expect(page.locator('#editKind')).toBeHidden();
+  await expect(page.locator('#editWhat')).toBeHidden();
+  await expect(page.locator('#editorSave')).toHaveText('Start the day');
+
+  // The button is pressed when you remember, not when it happened.
+  await page.getByRole('button', { name: '30m ago' }).click();
+  await expect(page.locator('#editFrom')).toHaveValue('13:50');
+
+  await page.locator('#editFrom').fill('08:15');
+  await page.locator('#editorSave').click();
+
+  const sent = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'start_day').pop()[1]);
+  expect(sent.at, 'the typed time is what is filed').toBe('08:15');
+  await expect(page.locator('#editor')).toBeHidden();
+});
+
+test('calling it a day asks when, and reopening does not', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+
+  await page.locator('#endBtn').click();
+  await expect(page.locator('#editorTitle')).toContainText('end');
+  await expect(page.locator('#editorSave')).toHaveText('Call it a day');
+
+  // Kaizen answers a write with the new day, so arrange that before saving.
+  await page.evaluate(() => {
+    window.__after = { local_time: '17:30', ledgers: [{ ...window.__baseLedger, ended_at: '17:05' }] };
+  });
+
+  await page.locator('#editFrom').fill('17:05');
+  await page.locator('#editorSave').click();
+  let sent = await page.evaluate(() => window.__calls.filter(([c]) => c === 'end_day').pop()[1]);
+  expect(sent).toMatchObject({ at: '17:05', reopen: false });
+
+  // Once ended, the button reopens, and there is no time to choose.
+  await expect(page.locator('#endBtn')).toHaveText('Reopen the day');
+  await expect(page.locator('#endBtn')).toHaveText('Reopen the day');
+  await page.locator('#endBtn').click();
+
+  sent = await page.evaluate(() => window.__calls.filter(([c]) => c === 'end_day').pop()[1]);
+  expect(sent.reopen, 'reopening asks nothing').toBe(true);
+});
+
+test('a refused moment is shown, with the copy word', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await page.evaluate(() => { window.__refuseEnd = 'A day cannot end before it started.'; });
+  await open(page);
+
+  await page.locator('#endBtn').click();
+  await page.locator('#editFrom').fill('06:00');
+  await page.locator('#editorSave').click();
+
+  await expect(page.locator('#editorNote')).toContainText('cannot end before it started');
+  await expect(page.locator('#editorNote .copy-error')).toBeVisible();
+  await expect(page.locator('#editor'), 'a refusal leaves the panel open to fix').toBeVisible();
 });

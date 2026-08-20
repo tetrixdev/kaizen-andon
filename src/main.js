@@ -28,8 +28,10 @@ const snoozeBtn = document.getElementById('snoozeBtn');
 const editor = document.getElementById('editor');
 const editorTitle = document.getElementById('editorTitle');
 const editorNote = document.getElementById('editorNote');
+const editorSave = document.getElementById('editorSave');
 const editFrom = document.getElementById('editFrom');
 const editTo = document.getElementById('editTo');
+const editFromLabel = document.getElementById('editFromLabel');
 const editQuick = document.getElementById('editQuick');
 const editKind = document.getElementById('editKind');
 const editWhat = document.getElementById('editWhat');
@@ -743,6 +745,32 @@ function currentKind() {
 
 function quickChips(gap) {
   const chips = [];
+
+  // Marking a moment moves ONE field, and it usually moves backwards: the
+  // button is pressed when you remember, not when it happened.
+  if (editorMode !== 'entry') {
+    if (localNow) chips.push(['Now', () => { editFrom.value = localNow; }]);
+
+    for (const [label, minutes] of [['5m ago', 5], ['15m ago', 15], ['30m ago', 30], ['1h ago', 60]]) {
+      chips.push([label, () => {
+        const from = toMinutes(editFrom.value || localNow || '09:00');
+        editFrom.value = hhmm(Math.max(0, from - minutes));
+      }]);
+    }
+
+    editQuick.innerHTML = '';
+    for (const [label, act] of chips) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'chip';
+      button.textContent = label;
+      button.addEventListener('click', (event) => { event.stopPropagation(); act(); });
+      editQuick.appendChild(button);
+    }
+
+    return;
+  }
+
   if (gap) chips.push(['The whole gap', () => { editFrom.value = gap.from; editTo.value = gap.to; }]);
   if (localNow && !viewDate) chips.push(['To now', () => { editTo.value = localNow; }]);
 
@@ -772,12 +800,38 @@ function quickChips(gap) {
  */
 let splitAt = null;
 
-function openEditor({ gap = null, entry = null, splitAt: at = null } = {}) {
+/** 'entry' fills a span; 'start' and 'end' mark one moment of the day. */
+let editorMode = 'entry';
+
+function openEditor({ gap = null, entry = null, splitAt: at = null, mode = 'entry' } = {}) {
   editingId = entry?.id ?? null;
   splitAt = at;
+  editorMode = mode;
 
   editor.classList.toggle('external', !!ledger?.logs_externally);
+  editor.classList.toggle('moment', mode !== 'entry');
   clearFailure(editorNote);
+
+  // The day's start and end are one field, and prefilled with now because that
+  // is usually right. Usually is not always: the button gets pressed when you
+  // remember, which is rarely the minute it happened, and a stamp you cannot
+  // move is only marginally better than no stamp at all.
+  if (mode !== 'entry') {
+    const starting = mode === 'start';
+    editorTitle.textContent = starting ? 'When did the day start?' : 'When did the day end?';
+    editFromLabel.textContent = starting ? 'Started at' : 'Ended at';
+    editorSave.textContent = starting ? 'Start the day' : 'Call it a day';
+    editFrom.value = (starting ? ledger?.started_at : ledger?.ended_at) ?? localNow ?? '';
+    quickChips(null);
+    onlyPanel('editor');
+    editFrom.focus();
+    editFrom.select();
+
+    return;
+  }
+
+  editorSave.textContent = 'File it';
+  editFromLabel.textContent = 'From';
 
   if (at) {
     editorTitle.textContent = 'Split this in two';
@@ -804,15 +858,48 @@ function closeEditor() {
   onlyPanel(expanded ? 'slab' : null);
 }
 
+const CLOCK = /^\d{1,2}:\d{2}$/;
+
+function complain(text) {
+  clearFailure(editorNote);
+  editorNote.classList.add('bad');
+  editorNote.textContent = text;
+}
+
+/** Mark the start or the end of the day, at the time actually typed. */
+async function markMoment() {
+  const at = editFrom.value.trim();
+
+  if (!CLOCK.test(at)) return complain('A time reads as 13:45.');
+
+  editorSave.disabled = true;
+  clearFailure(editorNote);
+  editorNote.textContent = 'Saving…';
+
+  const starting = editorMode === 'start';
+  const command = starting ? 'start_day' : 'end_day';
+  const args = starting ? { at, date: viewDate } : { at, reopen: false, date: viewDate };
+
+  try {
+    apply(await invoke(command, args));
+    closeEditor();
+  } catch (e) {
+    // Kaizen refuses an end before its start, which is worth reading rather
+    // than silently clamping to something nobody asked for.
+    await failed(editorNote, command, e, args);
+  } finally {
+    editorSave.disabled = false;
+  }
+}
+
 async function fileEntries() {
+  if (editorMode !== 'entry') return markMoment();
+
   const from = editFrom.value.trim();
   const to = editTo.value.trim();
-  const shape = /^\d{1,2}:\d{2}$/;
 
-  if (!shape.test(from) || !shape.test(to)) {
-    editorNote.classList.add('bad');
-    editorNote.textContent = 'Both times read as 13:45.';
-    return;
+  if (!CLOCK.test(from) || !CLOCK.test(to)) {
+    return complain('Both times read as 13:45.');
   }
 
   const common = {
@@ -833,8 +920,7 @@ async function fileEntries() {
       ]
     : [{ ...(editingId ? { id: editingId } : {}), from, to, ...common }];
 
-  const button = document.getElementById('editorSave');
-  button.disabled = true;
+  editorSave.disabled = true;
   editorNote.classList.remove('bad');
   editorNote.textContent = 'Filing…';
 
@@ -847,11 +933,11 @@ async function fileEntries() {
     // "09:00-10:00 overlaps an entry already filed" says what to change.
     failed(editorNote, 'save_entries', e, { entries, date: viewDate });
   } finally {
-    button.disabled = false;
+    editorSave.disabled = false;
   }
 }
 
-document.getElementById('editorSave').addEventListener('click', (e) => { e.stopPropagation(); fileEntries(); });
+editorSave.addEventListener('click', (e) => { e.stopPropagation(); fileEntries(); });
 document.getElementById('editorClose').addEventListener('click', (e) => { e.stopPropagation(); closeEditor(); });
 editor.addEventListener('click', (e) => e.stopPropagation());
 editor.addEventListener('keydown', (e) => { if (e.key === 'Enter') fileEntries(); });
@@ -864,24 +950,24 @@ addBtn.addEventListener('click', (event) => {
 
 endBtn.addEventListener('click', async (event) => {
   event.stopPropagation();
-  try {
-    apply(await invoke('end_day', {
-      at: null,
-      reopen: endBtn.dataset.reopen === 'yes',
-      date: viewDate,
-    }));
-  } catch (e) {
-    failed(sub, 'end_day', e, { reopen: endBtn.dataset.reopen === 'yes', date: viewDate });
+
+  // Reopening has no time to choose: it only takes the end off again.
+  if (endBtn.dataset.reopen === 'yes') {
+    try {
+      apply(await invoke('end_day', { at: null, reopen: true, date: viewDate }));
+    } catch (e) {
+      failed(sub, 'end_day (reopen)', e, { reopen: true, date: viewDate });
+    }
+
+    return;
   }
+
+  openEditor({ mode: 'end' });
 });
 
-startBtn.addEventListener('click', async (event) => {
+startBtn.addEventListener('click', (event) => {
   event.stopPropagation();
-  try {
-    apply(await invoke('start_day', { at: null, date: viewDate }));
-  } catch (e) {
-    failed(sub, 'start_day', e, { at: null, date: viewDate });
-  }
+  openEditor({ mode: 'start' });
 });
 
 // ── Looking back ────────────────────────────────────────────────────────
