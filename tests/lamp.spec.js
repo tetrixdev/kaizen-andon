@@ -226,13 +226,6 @@ const STATES = [
       await page.locator('#editorSave').click();
       await expect(page.locator('#editorNote')).toContainText('overlaps');
     } },
-  { name: 'pinned-popover', config: CONNECTED, day: { ledgers: [LEDGER()] },
-    async act(page) {
-      await open(page);
-      await page.locator('#track .seg.work').first().click();
-      await expect(page.locator('#pop')).toBeVisible();
-      await expect(page.locator('#popActions')).toBeVisible();
-    } },
   { name: 'history-grid', config: CONNECTED, day: { ledgers: [LEDGER()] },
     async act(page) {
       await open(page);
@@ -341,10 +334,12 @@ test('splitting files the shortened entry and its second half together', async (
   await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
   await page.goto(PAGE);
   await settle(page);
-
   await open(page);
-  await page.locator('#track .seg.work').first().click();
-  await page.locator('#popSplit').click();
+
+  // Split lives with the entry now, one row-click away.
+  await page.locator('.erow[data-kind="entry"]').first().click();
+  await settle(page);
+  await page.locator('#editorSplit').click();
   await page.locator('#editorSave').click();
 
   const sent = await page.evaluate(() =>
@@ -353,6 +348,81 @@ test('splitting files the shortened entry and its second half together', async (
   expect(sent.entries[0].id, 'the first half edits the original').toBeTruthy();
   expect(sent.entries[1].id, 'the second half is a new row').toBeFalsy();
   expect(sent.entries[0].to).toBe(sent.entries[1].from);
+});
+
+test('a block does what its row does, once there is a row', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  // Hovering says what a block was, open or shut.
+  await page.locator('#track .seg.work').first().hover();
+  await expect(page.locator('#pop')).toBeVisible();
+  await expect(page.locator('#popTitle')).toContainText('Ticket triage');
+
+  // Shut, there is nothing above the strip to open, so it opens the day.
+  await page.locator('#track .seg.work').first().click();
+  await settle(page);
+  await expect(page.locator('#slab')).toBeVisible();
+  await expect(page.locator('#editor'), 'nothing to edit yet').toBeHidden();
+
+  // Open, the strip is the same control as the rows: a block opens its entry.
+  await page.locator('#track .seg.work').first().click();
+  await settle(page);
+  await expect(page.locator('#editor')).toBeVisible();
+  await expect(page.locator('#editFrom')).toHaveValue('08:34');
+
+  await page.locator('#editorClose').click();
+  await settle(page);
+
+  // And a hole opens the filing panel on its own span, from either side.
+  await page.locator('#track .seg.gap').first().click();
+  await settle(page);
+  await expect(page.locator('#editFrom')).toHaveValue('13:00');
+  await expect(page.locator('#editTo')).toHaveValue('14:35');
+});
+
+test('hovering either half lights both', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+
+  const seg = page.locator('#track .seg[data-kind="entry"][data-index="2"]');
+  const row = page.locator('.erow[data-kind="entry"][data-index="2"]');
+
+  await seg.hover();
+  await expect(row, 'the row lights with its block').toHaveClass(/lit/);
+  await expect(seg).toHaveClass(/lit/);
+
+  await page.locator('#slabTitle').hover();
+  await expect(row).not.toHaveClass(/lit/);
+
+  await row.hover();
+  await expect(seg, 'and the block lights with its row').toHaveClass(/lit/);
+});
+
+test('delete and the link live with the entry', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+
+  // The first entry carries a reference and a link; the third does not.
+  await page.locator('.erow[data-kind="entry"]').first().click();
+  await settle(page);
+  await expect(page.locator('#editorDelete')).toBeVisible();
+  await expect(page.locator('#editorSplit')).toBeVisible();
+  await expect(page.locator('#editorOpen')).toBeVisible();
+
+  await page.locator('#editorDelete').click();
+  const sent = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'delete_entry').pop()[1]);
+  expect(sent.id).toBeTruthy();
+  await expect(page.locator('#editor')).toBeHidden();
 });
 
 test('a personal context is never asked for a reference', async ({ page }) => {
@@ -367,6 +437,11 @@ test('a personal context is never asked for a reference', async ({ page }) => {
   await expect(page.locator('#editor')).toBeVisible();
   await expect(page.locator('#editRef')).toBeHidden();
   await expect(page.locator('#editLink')).toBeHidden();
+
+  // Nothing exists yet, so there is nothing to delete, split or open.
+  await expect(page.locator('#editorDelete')).toBeHidden();
+  await expect(page.locator('#editorSplit')).toBeHidden();
+  await expect(page.locator('#editorOpen')).toBeHidden();
 });
 
 test('the grid seals a referenced day differently from an unreferenced one', async ({ page }) => {
@@ -953,4 +1028,81 @@ test('the shadow fades out inside the window, not at its edge', async ({ page })
     expect(room[side], `${side}: the glow needs somewhere to go`).toBeGreaterThanOrEqual(14);
   }
   expect(room.padding).toBeGreaterThanOrEqual(14);
+});
+
+test('the rows read in clock order, holes among the entries', async ({ page }) => {
+  // Exactly the shape seen in the field: one entry late in the morning and two
+  // holes around it. Printed as two arrays, the entry came first and the times
+  // ran backwards down the column.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER({
+    started_at: '08:47',
+    entries: [{ id: 5, from: '11:00', to: '11:30', kind: 'work', minutes: 30,
+                description: 'Call with Sanne', referenced: false, reference: null, link: null }],
+    gaps: [{ from: '08:47', to: '11:00', minutes: 133 }, { from: '11:30', to: '11:39', minutes: 9 }],
+  })] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+
+  const times = await page.evaluate(() =>
+    [...document.querySelectorAll('.erow .e-time')].map((el) => el.textContent.trim()));
+  expect(times).toEqual(['08:47–11:00', '11:00–11:30', '11:30–11:39']);
+
+  // Sorting the display must not renumber what a click resolves against.
+  await page.locator('.erow').first().click();
+  await settle(page);
+  await expect(page.locator('#editFrom'), 'the first row is the first hole').toHaveValue('08:47');
+});
+
+test('the segment card opens upward, and the window makes room for it', async ({ page }) => {
+  // The widget lives in the bottom-right corner, so downward is off the edge
+  // of the screen. It used to flip down because the window, being sized to its
+  // content, had nothing above the track to open into.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  const before = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'place_window').pop()[1].height);
+
+  // Held at a generous size for the hover itself. A real window grows UPWARD,
+  // keeping its bottom edge, so the block stays under the cursor; resizing the
+  // viewport here would move it away and the hover would end, which is the
+  // harness's limitation and not the app's.
+  await page.setViewportSize({ width: 292, height: before + 260 });
+  await page.locator('#track .seg.work').first().hover();
+  await expect(page.locator('#pop')).toBeVisible();
+
+  const after = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'place_window').pop()[1].height);
+  expect(after, 'the window grows to hold the card').toBeGreaterThan(before);
+
+  // And it asks once: a card that grew the window, lost the cursor and shrank
+  // again would flicker for as long as you hovered it.
+  const asks = await page.evaluate(() => window.__calls.filter(([c]) => c === 'place_window').length);
+  await page.waitForTimeout(400);
+  const later = await page.evaluate(() => window.__calls.filter(([c]) => c === 'place_window').length);
+  expect(later, 'no resize loop while hovering').toBe(asks);
+
+  const geom = await page.evaluate(() => {
+    const pop = document.getElementById('pop').getBoundingClientRect();
+    const seg = document.querySelector('#track .seg.work').getBoundingClientRect();
+    return { popBottom: pop.bottom, segTop: seg.top, popTop: pop.top,
+             popLeft: pop.left, popRight: pop.right, view: window.innerWidth };
+  });
+
+  expect(geom.popBottom, 'it sits above the segment').toBeLessThanOrEqual(geom.segTop + 1);
+  expect(geom.popTop, 'and inside the window').toBeGreaterThanOrEqual(0);
+  expect(geom.popLeft).toBeGreaterThanOrEqual(0);
+  expect(geom.popRight, 'pulled back inside the right edge').toBeLessThanOrEqual(geom.view);
+
+  // Moving off it gives the room back.
+  await page.locator('#delta').hover();
+  await expect(page.locator('#pop')).toBeHidden();
+  await page.waitForTimeout(120);
+  const closed = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'place_window').pop()[1].height);
+  expect(closed).toBe(before);
 });

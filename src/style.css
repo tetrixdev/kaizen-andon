@@ -12,6 +12,7 @@
 
   --moss: #5b7052;
   --ochre: #b8823a;
+  --amber: #c9971a;
   --vermilion: #d9483b;
   --indigo: #2e4a7d;
 
@@ -35,6 +36,7 @@
     --vermilion: #ef7466;
     --moss: #7f9673;
     --ochre: #d3a05a;
+    --amber: #e5c05c;
   }
 }
 
@@ -299,7 +301,7 @@ body {
 
 .pill { font-size: 10px; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
 .pill.ok { background: color-mix(in srgb, var(--moss) 18%, transparent); color: var(--moss); }
-.pill.pending { background: color-mix(in srgb, var(--ochre) 22%, transparent); color: var(--ochre); }
+.pill.pending { background: color-mix(in srgb, var(--amber) 26%, transparent); color: var(--amber); }
 .pill.open { background: color-mix(in srgb, var(--vermilion) 14%, transparent); color: var(--vermilion); }
 
 /* ── Controls ───────────────────────────────────────────── */
@@ -362,6 +364,16 @@ body {
 
 .inp:focus { outline: none; border-color: var(--vermilion); }
 
+/* A placeholder should not be mistakable for a value. */
+.inp::placeholder { color: var(--ink-faint); opacity: .72; }
+
+/* Not stretched. `.inp` grows to fill its column so the address box can share
+   a row with Connect, but inside the grid that made every input as tall as the
+   tallest thing beside it: the row with the quick chips pulled From and To to
+   one height and the reference row sat at another. */
+.editor-grid .inp { flex: none; height: 32px; }
+.editor-grid .fld { justify-content: flex-start; }
+
 .setup-note { margin: 0; font-size: 11px; color: var(--ink-faint); line-height: 1.5; }
 
 .btn:disabled { opacity: .6; cursor: default; }
@@ -404,6 +416,9 @@ body {
 }
 
 .panel-note { font-size: 11px; color: var(--ink-faint); line-height: 1.5; margin: 0; }
+/* An empty note still had a line's height and a margin above it, which is a
+   band of nothing under the last row for most of the panel's life. */
+.panel-note:empty { display: none; }
 .panel-note.bad { color: var(--vermilion); }
 
 /* ── The editor ──────────────────────────────────────── */
@@ -536,6 +551,10 @@ body {
 .pop {
   position: fixed;
   z-index: 20;
+  /* Read-only, so it never wants the cursor. Taking pointer events meant it
+     blocked whatever it covered, and moving the cursor up off a block landed
+     on the card instead of leaving the strip. */
+  pointer-events: none;
   min-width: 190px;
   max-width: 320px;
   background: var(--paper-raised);
@@ -545,19 +564,18 @@ body {
   box-shadow: 0 10px 30px -14px rgba(0, 0, 0, .5);
   font-size: 12px;
 }
-.pop.pinned { border-color: var(--ink-faint); }
 .pop-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 4px; }
 .pop-title { font-weight: 600; }
 .pop-span { font-size: 11px; color: var(--ink-faint); }
 .pop-body { color: var(--ink-soft); line-height: 1.5; }
-.pop-actions { display: flex; gap: 6px; margin-top: 9px; }
 
 /* Middle truncation, keeping the end: a trailing ellipsis eats the reference
    id, which is the only part that differs between two links. */
 .pop-link { display: block; margin-top: 4px; color: var(--indigo); text-decoration: none; word-break: break-all; }
-.pop:not(.pinned) .pop-link { color: var(--ink-faint); pointer-events: none; }
+/* Never a target: this card closes the moment the cursor leaves the block.
+   The link is reachable in the editor, where it stays still. */
+.pop-link { color: var(--ink-faint); pointer-events: none; }
 
-.seg.pinned { outline: 2px solid var(--ink); outline-offset: 1px; }
 
 .history-body { display: flex; gap: 28px; align-items: flex-start; }
 .calendar { flex: none; }
@@ -720,3 +738,23 @@ body {
    and the seal replaces the lamp. */
 .phase-referencing .lamp { font-size: 21px; }
 .phase-referencing .erow .pill.pending { background: color-mix(in srgb, var(--vermilion) 14%, transparent); color: #a8382d; }
+
+/* ── The strip and the rows are one thing ────────────────
+   Hovering either lights both. Without it, reading across the two means
+   counting rows to work out which block is which. */
+.seg.lit { outline: 1.5px solid var(--ink-soft); outline-offset: 1px; }
+.erow.lit { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+
+/* Whatever appears when the card opens fades up rather than snapping in. The
+   window is resized by the OS in one step, so only the CONTENTS animate:
+   anything that changed the layout would race that resize and clip. */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.slab, .editor, .history, .banner { animation: rise .16s ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .slab, .editor, .history, .banner { animation: none; }
+}

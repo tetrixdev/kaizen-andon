@@ -96,11 +96,14 @@ fn place_window(window: WebviewWindow, expanded: bool, height: Option<i32>) -> R
 
     let (x, y) = placement::anchor(area, width, height, scale);
 
+    // Moved and resized as ONE change. Done as two calls the window is briefly
+    // its old size at its new corner, which is a card that jumps and then
+    // grows rather than a card that opens.
     window
-        .set_size(PhysicalSize::new(width as u32, height as u32))
-        .map_err(|e| e.to_string())?;
-    window
-        .set_position(PhysicalPosition::new(x, y))
+        .set_bounds(tauri::Rect {
+            position: tauri::Position::Physical(PhysicalPosition::new(x, y)),
+            size: tauri::Size::Physical(PhysicalSize::new(width as u32, height as u32)),
+        })
         .map_err(|e| e.to_string())?;
 
     Ok(())

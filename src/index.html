@@ -37,6 +37,9 @@
     <div class="panel-head">
       <span class="panel-title" id="editorTitle">Account for a span</span>
       <div class="panel-acts">
+        <button class="btn btn-ghost" id="editorOpen" type="button" hidden>Open link</button>
+        <button class="btn btn-ghost" id="editorSplit" type="button" hidden>Split</button>
+        <button class="btn btn-ghost" id="editorDelete" type="button" hidden>Delete</button>
         <button class="btn btn-ghost" id="editorClose" type="button">Cancel</button>
         <button class="btn btn-seal" id="editorSave" type="button">File it</button>
       </div>
@@ -124,17 +127,17 @@
        Hover reads; clicking pins, and only a pinned card has live actions and
        a clickable link: a link inside something that closes when the cursor
        drifts is a target you would miss half the time. -->
+  <!-- Read-only. Hovering a block says what it was; clicking it does what
+       clicking anywhere else on the card does, which is open the day. Pinning
+       existed so a link could be clicked without the card vanishing, and it
+       cost a second interaction mode on a widget this small; the link, Split
+       and Delete live in the editor now, one row-click away. -->
   <div class="pop" id="pop" hidden data-floating>
     <div class="pop-head">
       <span class="pop-title" id="popTitle"></span>
       <span class="pop-span mono" id="popSpan"></span>
     </div>
     <div class="pop-body" id="popBody"></div>
-    <div class="pop-actions" id="popActions" hidden>
-      <button class="btn btn-ghost" id="popEdit" type="button">Edit</button>
-      <button class="btn btn-ghost" id="popSplit" type="button">Split</button>
-      <button class="btn btn-ghost" id="popDelete" type="button">Delete</button>
-    </div>
   </div>
 
   <script type="module" src="main.js"></script>

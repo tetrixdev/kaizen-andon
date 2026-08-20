@@ -31,6 +31,9 @@ const editor = document.getElementById('editor');
 const editorTitle = document.getElementById('editorTitle');
 const editorNote = document.getElementById('editorNote');
 const editorSave = document.getElementById('editorSave');
+const editorOpen = document.getElementById('editorOpen');
+const editorSplit = document.getElementById('editorSplit');
+const editorDelete = document.getElementById('editorDelete');
 const editFrom = document.getElementById('editFrom');
 const editTo = document.getElementById('editTo');
 const editFromLabel = document.getElementById('editFromLabel');
@@ -50,7 +53,6 @@ const pop = document.getElementById('pop');
 const popTitle = document.getElementById('popTitle');
 const popSpan = document.getElementById('popSpan');
 const popBody = document.getElementById('popBody');
-const popActions = document.getElementById('popActions');
 const addBtn = document.getElementById('addBtn');
 const historyBtn = document.getElementById('historyBtn');
 const startBtn = document.getElementById('startBtn');
@@ -72,8 +74,6 @@ let timer = null;
 let viewDate = null;
 /** Which month the grid is showing, `YYYY-MM`. */
 let viewMonth = null;
-/** The pinned segment, by entry id or gap key, or null. */
-let pinned = null;
 /** The entry being edited, or null for a new one. */
 let editingId = null;
 
@@ -224,8 +224,6 @@ function renderTrack(l) {
   for (const [index, e] of (l.entries ?? []).entries()) {
     const from = toMinutes(e.from);
     const to = toMinutes(e.to);
-    const key = e.id != null ? `e${e.id}` : `i${index}`;
-    const pin = pinned === key ? ' pinned' : '';
 
     // A label only where one fits. Two clipped letters inside a fifteen
     // minute block is noise pretending to be information.
@@ -236,18 +234,17 @@ function renderTrack(l) {
     if (e.kind === 'work') {
       alt = !alt;
       const unref = l.logs_externally && !e.referenced ? ' unref' : '';
-      parts.push(`<span class="seg work${alt ? ' alt' : ''}${unref}${pin}" data-kind="entry" data-key="${key}" data-index="${index}" style="${place(from, to, open, span)}">${label}</span>`);
+      parts.push(`<span class="seg work${alt ? ' alt' : ''}${unref}" data-kind="entry" data-index="${index}" style="${place(from, to, open, span)}">${label}</span>`);
     } else {
       alt = false;
-      parts.push(`<span class="seg rest${pin}" data-kind="entry" data-key="${key}" data-index="${index}" style="${place(from, to, open, span)}">${label}</span>`);
+      parts.push(`<span class="seg rest" data-kind="entry" data-index="${index}" style="${place(from, to, open, span)}">${label}</span>`);
     }
   }
 
   for (const [index, g] of (l.gaps ?? []).entries()) {
-    const key = `g${index}`;
     const room = ((toMinutes(g.to) - toMinutes(g.from)) / span) * pixels;
     const label = wide && room > 78 ? `<span class="seg-label">${hhmm(g.minutes)} unaccounted</span>` : '';
-    parts.push(`<span class="seg gap${pinned === key ? ' pinned' : ''}" data-kind="gap" data-key="${key}" data-index="${index}" style="${place(toMinutes(g.from), toMinutes(g.to), open, span)}">${label}</span>`);
+    parts.push(`<span class="seg gap" data-kind="gap" data-index="${index}" style="${place(toMinutes(g.from), toMinutes(g.to), open, span)}">${label}</span>`);
   }
 
   // The day's own edges, as marks rather than as shading. The end is drawn
@@ -271,30 +268,41 @@ function renderTrack(l) {
 }
 
 function renderEntries(l) {
-  const rows = [];
+  // One list in clock order. Entries and holes arrive as two arrays and used
+  // to be printed one after the other, so every hole sat below every entry
+  // regardless of when it happened: a morning gap appeared under an afternoon
+  // meeting, and the column of times ran backwards.
+  //
+  // The index kept here is the index into the ORIGINAL array, because that is
+  // what a click resolves against. Sorting the display must not renumber it.
+  const timeline = [
+    ...(l.entries ?? []).map((item, index) => ({ item, index, kind: 'entry' })),
+    ...(l.gaps ?? []).map((item, index) => ({ item, index, kind: 'gap' })),
+  ].sort((a, b) => toMinutes(a.item.from) - toMinutes(b.item.from)
+    || toMinutes(a.item.to) - toMinutes(b.item.to));
 
-  for (const [index, e] of (l.entries ?? []).entries()) {
-    const pill = !l.logs_externally || e.kind !== 'work'
-      ? (e.kind === 'rest' ? '<span class="pill">rest</span>' : '')
-      : e.referenced
-        ? `<span class="pill ok">✓ ${esc(e.reference)}</span>`
+  const rows = timeline.map(({ item, index, kind }) => {
+    if (kind === 'gap') {
+      return `<div class="erow gap-row" data-kind="gap" data-index="${index}">
+      <span class="e-time">${esc(item.from)}–${esc(item.to)}</span>
+      <span class="e-dur">${hhmm(item.minutes)}</span>
+      <span class="e-what">Unaccounted</span>
+    </div>`;
+    }
+
+    const pill = !l.logs_externally || item.kind !== 'work'
+      ? (item.kind === 'rest' ? '<span class="pill">rest</span>' : '')
+      : item.referenced
+        ? `<span class="pill ok">✓ ${esc(item.reference)}</span>`
         : '<span class="pill pending">no reference</span>';
 
-    rows.push(`<div class="erow ${e.kind === 'rest' ? 'rest-row' : ''}" data-kind="entry" data-index="${index}">
-      <span class="e-time">${esc(e.from)}–${esc(e.to)}</span>
-      <span class="e-dur">${hhmm(e.minutes)}</span>
-      <span class="e-what">${esc(e.description ?? (e.kind === 'work' ? 'Work' : 'Rest'))}</span>
+    return `<div class="erow ${item.kind === 'rest' ? 'rest-row' : ''}" data-kind="entry" data-index="${index}">
+      <span class="e-time">${esc(item.from)}–${esc(item.to)}</span>
+      <span class="e-dur">${hhmm(item.minutes)}</span>
+      <span class="e-what">${esc(item.description ?? (item.kind === 'work' ? 'Work' : 'Rest'))}</span>
       ${pill}
-    </div>`);
-  }
-
-  for (const [index, g] of (l.gaps ?? []).entries()) {
-    rows.push(`<div class="erow gap-row" data-kind="gap" data-index="${index}">
-      <span class="e-time">${esc(g.from)}–${esc(g.to)}</span>
-      <span class="e-dur">${hhmm(g.minutes)}</span>
-      <span class="e-what">Unaccounted</span>
-    </div>`);
-  }
+    </div>`;
+  });
 
   entriesEl.innerHTML = rows.join('') || '<div class="erow"><span class="e-what">Nothing filed yet.</span></div>';
   slabTitle.textContent = `${l.context} · ${l.date}`;
@@ -448,6 +456,12 @@ function contentHeight() {
   // make the window grow by the height of a card that is drawn over the top.
   const panels = [...stack.children].filter((el) => !el.hidden);
 
+  // The segment popover is out of the page's flow but not out of the window's:
+  // the window is sized to its content, so unless its height is counted there
+  // is nowhere above the card for it to open into, and it flips downward past
+  // the bottom edge where it is simply cut off.
+  const floating = pop.hidden ? 0 : pop.getBoundingClientRect().height + 10;
+
   // Which panel is on top changes with what is open, and the stack has to read
   // as one card rather than a pile of separately rounded boxes.
   for (const [index, el] of panels.entries()) {
@@ -457,6 +471,7 @@ function contentHeight() {
 
   return Math.ceil(
     stack.getBoundingClientRect().height +
+      floating +
       parseFloat(style.paddingTop) +
       parseFloat(style.paddingBottom),
   );
@@ -484,6 +499,8 @@ function fit(force = false) {
     } catch (e) {
       console.error('place_window failed', e);
     }
+
+    placePop();
   });
 }
 
@@ -547,7 +564,7 @@ sub.addEventListener('click', (event) => {
 });
 
 card.addEventListener('click', (event) => {
-  if (event.target.closest('.btn, .seg, .amend') || setup.hidden === false) return;
+  if (event.target.closest('.btn, .amend') || setup.hidden === false) return;
   toggle();
 });
 
@@ -701,9 +718,14 @@ function clearFailure(where) {
 
 // ── Segment detail ──────────────────────────────────────────────────────
 //
-// Two levels on purpose. Hover reads; clicking pins. Only a pinned card has a
-// live link and reachable actions, because a link inside something that closes
-// the moment the cursor drifts is a target you would miss half the time.
+// Read-only. Hovering a block says what it was; clicking it does what clicking
+// anywhere else on the card does, which is open the day.
+//
+// There used to be a second level: a click pinned the card so its link could
+// be followed without it vanishing under the cursor. That is a whole extra
+// interaction mode on a widget the size of a business card, and it made the
+// strip the one part of the card that did not open it. The link, Split and
+// Delete moved into the editor, which is one click on a row away.
 
 /** Middle truncation, keeping the end: the id is the only part that differs. */
 function shortLink(url) {
@@ -718,7 +740,7 @@ function segmentAt(kind, index) {
   return (list ?? [])[index] ?? null;
 }
 
-function showPop(target, kind, index, pin) {
+function showPop(target, kind, index) {
   const item = segmentAt(kind, index);
   if (!item) return;
 
@@ -737,62 +759,116 @@ function showPop(target, kind, index, pin) {
       lines.push(`<a class="pop-link" href="${esc(item.link)}" title="${esc(item.link)}" target="_blank" rel="noreferrer">${esc(shortLink(item.link))}</a>`);
     }
   }
-  if (isGap) lines.push('Click to account for it.');
+  if (isGap) lines.push('Open the day to account for it.');
   popBody.innerHTML = lines.join('<br>');
 
-  pop.classList.toggle('pinned', !!pin);
-  popActions.hidden = !pin || isGap;
   pop.hidden = false;
+  popKey = `${kind}:${index}`;
 
-  // Above the segment, centred, and never off an edge.
+  // Ask for the taller window first, then place it: the segment itself moves
+  // down as the window grows, because the stack is anchored to the bottom.
+  fit(true);
+  placePop();
+  requestAnimationFrame(placePop);
+}
+
+/** Which segment the popover belongs to, so it can be re-placed after a resize. */
+let popKey = null;
+
+/**
+ * Put the card above its segment.
+ *
+ * Always upward. The widget lives in the bottom-right corner of the screen, so
+ * downward is off the edge of the world; the only reason it ever flipped was
+ * that the window had no room above, which is now counted for.
+ */
+function placePop() {
+  if (pop.hidden || !popKey) return;
+
+  const [kind, index] = popKey.split(':');
+  const target = track.querySelector(`.seg[data-kind="${kind}"][data-index="${index}"]`);
+  if (!target) return;
+
   const rect = target.getBoundingClientRect();
   const box = pop.getBoundingClientRect();
+
+  // Centred on the segment, then pulled back inside whichever edge it meets.
+  // The text wraps rather than the card hanging off the side.
   const left = Math.max(6, Math.min(window.innerWidth - box.width - 6,
     rect.left + rect.width / 2 - box.width / 2));
-  const top = rect.top - box.height - 8;
+
   pop.style.left = `${left}px`;
-  pop.style.top = `${top < 6 ? rect.bottom + 8 : top}px`;
+  pop.style.top = `${Math.max(6, rect.top - box.height - 8)}px`;
 }
 
 function closePop() {
+  if (pop.hidden) return;
+
   pop.hidden = true;
-  pop.classList.remove('pinned');
-  if (pinned) {
-    pinned = null;
-    if (ledger) renderTrack(ledger);
+  popKey = null;
+  fit(true);
+}
+
+/**
+ * Light the block and its row together.
+ *
+ * They are two drawings of one thing: the strip says when, the row says what.
+ * Hovering either should say which part of the other it is, or reading across
+ * the two means counting rows.
+ */
+function twinned(kind, index, on) {
+  const pair = [
+    track.querySelector(`.seg[data-kind="${kind}"][data-index="${index}"]`),
+    entriesEl.querySelector(`.erow[data-kind="${kind}"][data-index="${index}"]`),
+  ];
+
+  for (const el of pair) el?.classList.toggle('lit', on);
+}
+
+function unlight() {
+  for (const el of [...track.querySelectorAll('.lit'), ...entriesEl.querySelectorAll('.lit')]) {
+    el.classList.remove('lit');
   }
 }
 
 track.addEventListener('mouseover', (event) => {
-  if (pinned) return;
-  const seg = event.target.closest('.seg');
+  const seg = event.target.closest('.seg[data-kind]');
   if (!seg) return;
-  showPop(seg, seg.dataset.kind, Number(seg.dataset.index), false);
+
+  unlight();
+  twinned(seg.dataset.kind, seg.dataset.index, true);
+  showPop(seg, seg.dataset.kind, Number(seg.dataset.index));
 });
 
 track.addEventListener('mouseleave', () => {
-  if (!pinned) pop.hidden = true;
+  unlight();
+  closePop();
 });
 
+// Open, the strip is the same control as the rows above it: a block opens what
+// it describes. Closed, there is nothing above it to open, so it falls through
+// to the card and opens the day.
 track.addEventListener('click', (event) => {
+  const seg = event.target.closest('.seg[data-kind]');
+  if (!seg || !expanded) return;
+
   event.stopPropagation();
-  const seg = event.target.closest('.seg');
-  if (!seg) return;
+  closePop();
 
-  const kind = seg.dataset.kind;
   const index = Number(seg.dataset.index);
-
-  // A gap has no detail worth reading first, so it skips straight to filing.
-  if (kind === 'gap') {
-    closePop();
-    return openEditor({ gap: segmentAt('gap', index) });
-  }
-
-  pinned = seg.dataset.key;
-  renderTrack(ledger);
-  const again = track.querySelector(`[data-key="${pinned}"]`);
-  showPop(again ?? seg, kind, index, true);
+  if (seg.dataset.kind === 'gap') return openEditor({ gap: segmentAt('gap', index) });
+  openEditor({ entry: segmentAt('entry', index) });
 });
+
+entriesEl.addEventListener('mouseover', (event) => {
+  const row = event.target.closest('.erow[data-kind]');
+  if (!row) return;
+
+  unlight();
+  twinned(row.dataset.kind, row.dataset.index, true);
+});
+
+entriesEl.addEventListener('mouseleave', unlight);
 
 // A row is the same thing said in words, so it does the same thing.
 entriesEl.addEventListener('click', (event) => {
@@ -803,46 +879,6 @@ entriesEl.addEventListener('click', (event) => {
   const index = Number(row.dataset.index);
   if (row.dataset.kind === 'gap') return openEditor({ gap: segmentAt('gap', index) });
   openEditor({ entry: segmentAt('entry', index) });
-});
-
-document.addEventListener('click', (event) => {
-  if (pinned && !pop.contains(event.target)) closePop();
-});
-
-popEdit.addEventListener('click', (event) => {
-  event.stopPropagation();
-  const key = pinned;
-  const seg = track.querySelector(`[data-key="${key}"]`);
-  const entry = segmentAt('entry', Number(seg?.dataset.index));
-  closePop();
-  if (entry) openEditor({ entry });
-});
-
-// Splitting is filing two entries where there was one: the same editor, with
-// the second half offered as soon as the first is saved.
-popSplit.addEventListener('click', (event) => {
-  event.stopPropagation();
-  const seg = track.querySelector(`[data-key="${pinned}"]`);
-  const entry = segmentAt('entry', Number(seg?.dataset.index));
-  closePop();
-  if (!entry) return;
-
-  const middle = clock(Math.round((toMinutes(entry.from) + toMinutes(entry.to)) / 2));
-  openEditor({ entry, splitAt: middle });
-});
-
-popDelete.addEventListener('click', async (event) => {
-  event.stopPropagation();
-  const seg = track.querySelector(`[data-key="${pinned}"]`);
-  const entry = segmentAt('entry', Number(seg?.dataset.index));
-  closePop();
-  if (!entry?.id) return;
-
-  try {
-    apply(await invoke('delete_entry', { id: entry.id }));
-  } catch (e) {
-    failed(sub, 'delete_entry', e, { id: entry.id });
-  }
 });
 
 // ── Filing ──────────────────────────────────────────────────────────────
@@ -979,6 +1015,7 @@ let editorMode = 'entry';
 
 function openEditor({ gap = null, entry = null, splitAt: at = null, mode = 'entry' } = {}) {
   editingId = entry?.id ?? null;
+  editing = entry;
   splitAt = at;
   editorMode = mode;
 
@@ -991,6 +1028,10 @@ function openEditor({ gap = null, entry = null, splitAt: at = null, mode = 'entr
   // remember, which is rarely the minute it happened, and a stamp you cannot
   // move is only marginally better than no stamp at all.
   if (mode !== 'entry') {
+    editorDelete.hidden = true;
+    editorSplit.hidden = true;
+    editorOpen.hidden = true;
+
     const starting = mode === 'start';
     editorTitle.textContent = starting ? 'When did the day start?' : 'When did the day end?';
     editFromLabel.textContent = starting ? 'Started at' : 'Ended at';
@@ -1006,6 +1047,11 @@ function openEditor({ gap = null, entry = null, splitAt: at = null, mode = 'entr
 
   editorSave.textContent = 'File it';
   editFromLabel.textContent = 'From';
+
+  // These act on a row that exists, so they appear only when one is open.
+  editorDelete.hidden = !entry?.id;
+  editorSplit.hidden = !entry?.id || !!at;
+  editorOpen.hidden = !entry?.link;
 
   if (at) {
     editorTitle.textContent = 'Split this in two';
@@ -1116,6 +1162,43 @@ async function fileEntries() {
     editorSave.disabled = false;
   }
 }
+
+/** The entry the editor currently has open, for the actions beside it. */
+let editing = null;
+
+editorDelete.addEventListener('click', async (event) => {
+  event.stopPropagation();
+  if (!editing?.id) return;
+
+  editorDelete.disabled = true;
+
+  try {
+    apply(await invoke('delete_entry', { id: editing.id }));
+    closeEditor();
+  } catch (e) {
+    await failed(editorNote, 'delete_entry', e, { id: editing.id });
+  } finally {
+    editorDelete.disabled = false;
+  }
+});
+
+// Splitting is filing two entries where there was one: the same panel, with
+// the second half offered as soon as the first is saved.
+editorSplit.addEventListener('click', (event) => {
+  event.stopPropagation();
+  if (!editing) return;
+
+  const middle = clock(Math.round((toMinutes(editing.from) + toMinutes(editing.to)) / 2));
+  openEditor({ entry: editing, splitAt: middle });
+});
+
+editorOpen.addEventListener('click', (event) => {
+  event.stopPropagation();
+  const url = editLink.value.trim();
+  if (!url) return;
+
+  window.__TAURI__?.opener?.openUrl?.(url).catch((e) => console.error('open link', e));
+});
 
 editKind.addEventListener('click', (event) => {
   event.stopPropagation();
