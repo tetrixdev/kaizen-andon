@@ -96,15 +96,37 @@ fn place_window(window: WebviewWindow, expanded: bool, height: Option<i32>) -> R
 
     let (x, y) = placement::anchor(area, width, height, scale);
 
-    // Moved and resized as ONE change. Done as two calls the window is briefly
-    // its old size at its new corner, which is a card that jumps and then
-    // grows rather than a card that opens.
+    // There is no atomic set-bounds in Tauri 2.11, so moving and resizing are
+    // two calls and one frame always shows a window that is half-changed. The
+    // card is anchored to the window's bottom edge, and that edge is exactly
+    // what the intermediate gets wrong: whichever call lands first, the card
+    // jumps by the height difference and comes back.
+    //
+    // Position first, so the jump is upward. A card that hops up and settles
+    // reads as opening; one that drops and climbs back reads as a glitch.
+    //
+    // For the big change, where the width moves too, one frame of it is
+    // unmistakable, so the window is taken off screen for the swap instead.
+    let swap = window
+        .outer_size()
+        .map(|size| size.width != width as u32)
+        .unwrap_or(false)
+        && window.is_visible().unwrap_or(true);
+
+    if swap {
+        let _ = window.hide();
+    }
+
     window
-        .set_bounds(tauri::Rect {
-            position: tauri::Position::Physical(PhysicalPosition::new(x, y)),
-            size: tauri::Size::Physical(PhysicalSize::new(width as u32, height as u32)),
-        })
+        .set_position(PhysicalPosition::new(x, y))
         .map_err(|e| e.to_string())?;
+    window
+        .set_size(PhysicalSize::new(width as u32, height as u32))
+        .map_err(|e| e.to_string())?;
+
+    if swap {
+        let _ = window.show();
+    }
 
     Ok(())
 }

@@ -885,14 +885,14 @@ test('the glow wraps the whole stack, and breathes rather than blinks', async ({
     return {
       wrapsSlab: stack.top <= box('slab').top + 1,
       wrapsCard: stack.bottom >= box('card').bottom - 1,
-      animates: getComputedStyle(document.getElementById('stack')).animationName,
+      animates: getComputedStyle(document.getElementById('stack'), '::after').animationName,
       lamp: getComputedStyle(document.querySelector('.lamp'), '::after').animationName,
     };
   });
 
   expect(geom.wrapsSlab && geom.wrapsCard, 'the glow follows the whole open shape').toBe(true);
-  expect(geom.animates).toBe('breathe');
-  expect(geom.lamp).toBe('glow');
+  expect(geom.animates).toBe('pulse');
+  expect(geom.lamp).toBe('pulse-lamp');
 
   await page.screenshot({ path: 'state-call-open.png' });
 });
@@ -991,15 +991,23 @@ test('the ring grows outward rather than fading in place', async ({ page }) => {
   await page.goto(PAGE);
   await settle(page);
 
-  const anim = await page.evaluate(() => ({
-    stack: getComputedStyle(document.getElementById('stack')).animationName,
-    lamp: getComputedStyle(document.querySelector('.lamp'), '::after').animationName,
-  }));
+  const anim = await page.evaluate(() => {
+    const ring = getComputedStyle(document.getElementById('stack'), '::after');
+    const lamp = getComputedStyle(document.querySelector('.lamp'), '::after');
+    return {
+      stack: ring.animationName, lamp: lamp.animationName,
+      stackDuration: ring.animationDuration, lampDuration: lamp.animationDuration,
+      stackEasing: ring.animationTimingFunction, lampEasing: lamp.animationTimingFunction,
+    };
+  });
 
   // The expansion is the character of it: a ring that only faded in place read
   // as a switch rather than a breath.
-  expect(anim.stack).toBe('breathe');
-  expect(anim.lamp).toBe('glow');
+  expect(anim.stack).toBe('pulse');
+  expect(anim.lamp).toBe('pulse-lamp');
+  // Aligned: the glyph brightens on the beat the ring is born.
+  expect(anim.stackDuration).toBe(anim.lampDuration);
+  expect(anim.stackEasing).toBe(anim.lampEasing);
 });
 
 test('the shadow fades out inside the window, not at its edge', async ({ page }) => {

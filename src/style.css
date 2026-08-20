@@ -14,6 +14,7 @@
   --ochre: #b8823a;
   --amber: #c9971a;
   --vermilion: #d9483b;
+  --vermilion-rgb: 217, 72, 59;
   --indigo: #2e4a7d;
 
   --serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
@@ -34,6 +35,7 @@
     --ink-soft: #a79d90;
     --ink-faint: #6d655b;
     --vermilion: #ef7466;
+    --vermilion-rgb: 239, 116, 102;
     --moss: #7f9673;
     --ochre: #d3a05a;
     --amber: #e5c05c;
@@ -173,31 +175,42 @@ body {
 
 /* The only animation in the whole widget. A thing that moves in the corner of
    your eye all day gets moved off the screen.
-   The ring grows outward, 3px to 9px, and thins as it goes: that expansion is
-   the whole character of it. The lamp behind the glyph fades instead, because
-   there is nowhere for a 42px square to expand to. */
-.stack.lit-call { animation: breathe 3.6s ease-in-out infinite; }
-.lit-call .lamp::after { animation: glow 3.6s ease-in-out infinite; }
 
-@keyframes breathe {
-  0%, 100% {
-    box-shadow: 0 1px 2px rgba(0, 0, 0, .1), 0 8px 22px -12px rgba(0, 0, 0, .4),
-                0 0 0 3px color-mix(in srgb, var(--vermilion) 20%, transparent);
-  }
-  50% {
-    box-shadow: 0 1px 2px rgba(0, 0, 0, .1),
-                0 8px 26px -12px color-mix(in srgb, var(--vermilion) 50%, transparent),
-                0 0 0 9px color-mix(in srgb, var(--vermilion) 5%, transparent);
-  }
+   A pulse, not a breath: it starts tight against the border and strongly red,
+   travels outward while thinning to nothing, and then there is a pause before
+   the next one. Something that swelled and shrank on a loop reads as an object
+   moving; something that radiates and stops reads as a signal being sent.
+
+   The ring rides on ::after so the card keeps its own drop shadow underneath,
+   and both halves share the same keyframe percentages and the same duration,
+   so the glyph brightens on exactly the beat the ring is born. */
+.stack::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
 }
 
-@keyframes glow {
-  0%, 100% { opacity: .25; }
-  50%      { opacity: 1; }
+.stack.lit-call::after { animation: pulse 3.4s cubic-bezier(.22, .61, .36, 1) infinite; }
+.lit-call .lamp::after { animation: pulse-lamp 3.4s cubic-bezier(.22, .61, .36, 1) infinite; }
+
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(var(--vermilion-rgb), 0); }
+  7%   { box-shadow: 0 0 0 0 rgba(var(--vermilion-rgb), .62); }
+  62%  { box-shadow: 0 0 0 15px rgba(var(--vermilion-rgb), 0); }
+  100% { box-shadow: 0 0 0 15px rgba(var(--vermilion-rgb), 0); }
+}
+
+@keyframes pulse-lamp {
+  0%   { opacity: 0; }
+  7%   { opacity: 1; }
+  62%  { opacity: 0; }
+  100% { opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .stack.lit-call { animation: none; box-shadow: 0 1px 2px rgba(0, 0, 0, .1), 0 8px 22px -12px rgba(0, 0, 0, .4), 0 0 0 3px color-mix(in srgb, var(--vermilion) 22%, transparent); }
+  .stack.lit-call::after { animation: none; box-shadow: 0 0 0 3px rgba(var(--vermilion-rgb), .28); }
   .lit-call .lamp::after { animation: none; opacity: .5; }
 }
 
