@@ -15,7 +15,7 @@ pub mod vault;
 use serde_json::json;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tauri_plugin_updater::UpdaterExt;
 
 /// What the frontend receives for a deep link.
@@ -96,26 +96,7 @@ fn place_window(window: WebviewWindow, expanded: bool, height: Option<i32>) -> R
 
     let (x, y) = placement::anchor(area, width, height, scale);
 
-    // There is no atomic set-bounds in Tauri 2.11, so moving and resizing are
-    // two calls and one frame always shows a window that is half-changed. The
-    // card is anchored to the window's bottom edge, and that edge is exactly
-    // what the intermediate gets wrong: whichever call lands first, the card
-    // jumps by the height difference and comes back.
-    //
-    // Position first, so the jump is upward. A card that hops up and settles
-    // reads as opening; one that drops and climbs back reads as a glitch.
-    //
-    // For the big change the page fades itself out first and back in after, so
-    // the half-changed frame happens while there is nothing to see. Hiding the
-    // window here instead would fight that: it would vanish mid-fade.
-    window
-        .set_position(PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())?;
-    window
-        .set_size(PhysicalSize::new(width as u32, height as u32))
-        .map_err(|e| e.to_string())?;
-
-    Ok(())
+    placement::set_bounds(&window, x, y, width, height)
 }
 
 /// The stored configuration: which Kaizen this is pointed at, and what the

@@ -84,6 +84,63 @@ pub fn work_area() -> Option<Rect> {
     })
 }
 
+/// Move and resize in ONE operation.
+///
+/// Tauri has no atomic set-bounds, and doing it as two calls always shows a
+/// frame of a window that is half-changed. The card is anchored to the
+/// window's bottom edge, and that edge is exactly what the intermediate gets
+/// wrong, so the card visibly jumps by the height difference and comes back.
+///
+/// That is not once per open. Showing a segment's detail card grows the window
+/// to hold it, so it happened on every hover, and again on every move between
+/// blocks, with a different jump each time because each card is a different
+/// height. `SetWindowPos` does both at once and there is no intermediate.
+#[cfg(windows)]
+pub fn set_bounds(
+    window: &tauri::WebviewWindow,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Result<(), String> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER,
+    };
+
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?;
+
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        )
+        .map_err(|e| e.to_string())
+    }
+}
+
+/// Everywhere else, two calls and the jump that comes with them. Only Windows
+/// ships, so this exists to keep the crate building on CI's other targets.
+#[cfg(not(windows))]
+pub fn set_bounds(
+    window: &tauri::WebviewWindow,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Result<(), String> {
+    window
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_size(tauri::PhysicalSize::new(width as u32, height as u32))
+        .map_err(|e| e.to_string())
+}
+
 /// Elsewhere there is no work area to ask for, so the caller falls back to the
 /// monitor's own bounds. Kept so the crate builds on the CI's Linux and macOS
 /// runners as well as Windows.
