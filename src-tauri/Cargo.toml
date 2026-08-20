@@ -54,9 +54,17 @@ windows = { version = "0.61", features = [
 # to this machine and user and is inert anywhere else.
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
+# Tuned for build time, deliberately. Fat LTO with a single codegen unit is
+# the slowest setting cargo has, and it relinks everything whenever this crate
+# changes, which is every release, so no cache can take that back. Thin LTO
+# keeps most of the size win for a fraction of the link.
+#
+# What is being traded away is a little binary size and some runtime speed in
+# an app that redraws a card once a minute and spends the rest of its life
+# asleep. What is being bought is a release you get to see.
 [profile.release]
-codegen-units = 1
-lto = true
+codegen-units = 16
+lto = "thin"
 opt-level = "s"
 panic = "abort"
 strip = true

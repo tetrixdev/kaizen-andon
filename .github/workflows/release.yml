@@ -35,6 +35,16 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # The same key in both workflows, on purpose. GitHub scopes a cache
+          # to the ref that made it, and a release runs on its own tag, so it
+          # can only read what the default branch left behind. A key derived
+          # from the job name meant the release matched nothing and downloaded
+          # and compiled all 292 crates every single time.
+          shared-key: windows-src-tauri
+          # This job runs on a tag, and nothing else will ever be able to read
+          # a cache saved from one. Writing it cost a minute and a quarter at
+          # the end of every release for no one's benefit; main keeps it warm.
+          save-if: false
 
       - name: Build and publish
         uses: tauri-apps/tauri-action@v0
