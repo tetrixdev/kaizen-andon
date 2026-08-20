@@ -46,7 +46,6 @@ pub struct Config {
     // Reopening expanded was a decision, not an omission. This is an ambient
     // lamp, and restoring a 1222px bar across the corner of the screen on
     // every launch is the opposite of ambient.
-
     /// The client this install registered as. Not a secret: Kaizen issues
     /// public clients, because a binary on the user's machine can always be
     /// read and a secret in it would be a secret in name only.
