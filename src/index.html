@@ -6,13 +6,28 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- Everything that stacks, in one box.
+       The stack exists so the card and the panels above it are one shape to
+       the eye AND one shape to the browser: the call-state glow has to wrap
+       the whole thing rather than tracing the card and drawing a line across
+       the seam where the ledger meets it. -->
+  <div class="stack lit-wait" id="stack">
+
   <!-- The ledger, above the bar. It grows upward out of it so the lamp never
        moves when the card opens. -->
   <div class="slab" id="slab" hidden>
     <div class="slab-head">
       <span class="slab-title" id="slabTitle">Today</span>
-      <span class="slab-hint" id="slabHint"></span>
+      <div class="actions" id="actions">
+        <button class="btn btn-seal" id="discuss">Discuss today with AI</button>
+        <button class="btn btn-ghost" id="startBtn" hidden>Start the day</button>
+        <button class="btn btn-ghost" id="endBtn" hidden>Call it a day</button>
+        <button class="btn btn-ghost" id="addBtn">Add entry</button>
+        <button class="btn btn-ghost" id="historyBtn">History</button>
+        <button class="btn btn-ghost" id="snoozeBtn" hidden>Put it down</button>
+      </div>
     </div>
+    <p class="slab-hint" id="slabHint"></p>
     <div class="etable" id="entries"></div>
   </div>
 
@@ -21,7 +36,10 @@
   <div class="editor" id="editor" hidden>
     <div class="panel-head">
       <span class="panel-title" id="editorTitle">Account for a span</span>
-      <button class="btn btn-ghost" id="editorClose" type="button">Cancel</button>
+      <div class="panel-acts">
+        <button class="btn btn-ghost" id="editorClose" type="button">Cancel</button>
+        <button class="btn btn-seal" id="editorSave" type="button">File it</button>
+      </div>
     </div>
     <div class="editor-grid">
       <label class="fld"><span class="fld-label" id="editFromLabel">From</span>
@@ -35,17 +53,14 @@
           <button type="button" class="toggle-btn on" data-kind="work">Work</button>
           <button type="button" class="toggle-btn" data-kind="rest">Rest</button>
         </div></div>
-      <label class="fld fld-wide span-only"><span class="fld-label">What</span>
+      <label class="fld fld-three span-only"><span class="fld-label">What</span>
         <input id="editWhat" class="inp" type="text" placeholder="What was it" spellcheck="false"></label>
       <label class="fld ext span-only"><span class="fld-label">Reference</span>
         <input id="editRef" class="inp mono" type="text" placeholder="TE-4471" spellcheck="false"></label>
-      <label class="fld ext fld-full span-only"><span class="fld-label">Link</span>
+      <label class="fld ext fld-three span-only"><span class="fld-label">Link</span>
         <input id="editLink" class="inp" type="text" placeholder="https://" spellcheck="false"></label>
     </div>
-    <div class="panel-foot">
-      <span class="panel-note" id="editorNote"></span>
-      <button class="btn btn-seal" id="editorSave" type="button">File it</button>
-    </div>
+    <p class="panel-note" id="editorNote"></p>
   </div>
 
   <!-- Looking back. A month of tiles, then one day loads in historical mode. -->
@@ -96,15 +111,10 @@
       </div>
       <div class="sub" id="sub">Point it at your Kaizen to begin</div>
       <div class="track" id="track"></div>
+      <div class="scale" id="scale" hidden></div>
     </div>
-    <div class="actions" id="actions" hidden>
-      <button class="btn btn-seal" id="discuss">Discuss today with AI</button>
-      <button class="btn btn-ghost" id="startBtn" hidden>Start the day</button>
-      <button class="btn btn-ghost" id="endBtn" hidden>Call it a day</button>
-      <button class="btn btn-ghost" id="addBtn">Add entry</button>
-      <button class="btn btn-ghost" id="historyBtn">History</button>
-      <button class="btn btn-ghost" id="snoozeBtn" hidden>Put it down</button>
-    </div>
+  </div>
+
   </div>
 
   <!-- Segment detail. Floating, so it never changes what the window measures.

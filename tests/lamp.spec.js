@@ -738,10 +738,13 @@ test('the link field gets a whole row, being the longest thing here', async ({ p
   const widths = await page.evaluate(() => ({
     link: document.getElementById('editLink').getBoundingClientRect().width,
     what: document.getElementById('editWhat').getBoundingClientRect().width,
+    ref: document.getElementById('editRef').getBoundingClientRect().width,
     grid: document.querySelector('.editor-grid').getBoundingClientRect().width,
   }));
-  expect(widths.link).toBeGreaterThan(widths.what);
-  expect(widths.link / widths.grid, 'a URL gets the full row').toBeGreaterThan(0.9);
+  // Reference and link share a row now: an id and where to find it are one
+  // fact said twice, and the URL is by far the longer half.
+  expect(widths.link / widths.grid, 'the URL takes most of the row').toBeGreaterThan(0.7);
+  expect(widths.link).toBeGreaterThan(widths.ref * 2.5);
 });
 
 test('a time before ten in the morning keeps its zero', async ({ page }) => {
@@ -779,4 +782,37 @@ test('a duration is not padded, because it is not a time', async ({ page }) => {
 
   // Five and a half hours is 5:31. "05:31" would read as half past five.
   await expect(page.locator('#delta')).toHaveText('5:31');
+});
+
+test('the glow wraps the whole stack, and breathes rather than blinks', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED,
+    { ledgers: [LEDGER({ state: 'call', gap_minutes: 240 })] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+
+  // The state lives on the stack, so the light reaches the ledger too and the
+  // glow traces one shape instead of drawing a line across the seam.
+  await expect(page.locator('#stack')).toHaveClass(/lit-call/);
+  await expect(page.locator('#card')).not.toHaveClass(/lit-call/);
+
+  const geom = await page.evaluate(() => {
+    const box = (id) => document.getElementById(id).getBoundingClientRect();
+    const stack = box('stack');
+    return {
+      wrapsSlab: stack.top <= box('slab').top + 1,
+      wrapsCard: stack.bottom >= box('card').bottom - 1,
+      animates: getComputedStyle(document.getElementById('stack'), '::after').animationName,
+      lamp: getComputedStyle(document.querySelector('.lamp'), '::after').animationName,
+    };
+  });
+
+  expect(geom.wrapsSlab && geom.wrapsCard, 'the glow follows the whole open shape').toBe(true);
+  // Opacity interpolates; a box-shadow built from color-mix() does not, which
+  // is why this used to snap on and off instead of breathing.
+  expect(geom.animates).toBe('breathe');
+  expect(geom.lamp).toBe('breathe');
+
+  await page.screenshot({ path: 'state-call-open.png' });
 });

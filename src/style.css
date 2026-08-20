@@ -70,9 +70,37 @@ body {
 }
 
 /* ── The card ───────────────────────────────────────────── */
-.andon {
+/* ── The stack ──────────────────────────────────────────
+   One box around the card and whatever is open above it. The state lives here
+   rather than on the card, so --lamp reaches the ledger's own gap segments and
+   the glow can wrap the whole shape. */
+.stack {
   --lamp: var(--moss);
   --lamp-glow: transparent;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  border-radius: 13px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .1), 0 8px 22px -12px rgba(0, 0, 0, .4);
+}
+
+/* The glow is a layer whose OPACITY animates, not a box-shadow whose colour
+   does. A box-shadow built with color-mix() does not interpolate: the browser
+   steps between the two keyframes instead of blending them, which is why the
+   lamp was snapping on and off rather than breathing. */
+.stack::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 15px;
+  pointer-events: none;
+  opacity: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--vermilion) 22%, transparent),
+              0 10px 34px -10px color-mix(in srgb, var(--vermilion) 55%, transparent);
+}
+
+.andon {
   background: var(--paper-raised);
   border: 1px solid var(--rule);
   border-radius: 13px;
@@ -80,13 +108,13 @@ body {
   display: flex;
   gap: 13px;
   align-items: center;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .1), 0 8px 22px -12px rgba(0, 0, 0, .4);
   flex: none;
 }
 
 .andon:hover { border-color: color-mix(in srgb, var(--lamp) 45%, var(--rule)); }
 
 .lamp {
+  position: relative;
   width: 42px;
   height: 42px;
   flex: none;
@@ -99,6 +127,18 @@ body {
   color: var(--lamp);
   background: radial-gradient(circle at 50% 50%, var(--lamp-glow) 0%, transparent 68%), var(--paper-sunk);
   border: 1px solid var(--rule);
+}
+
+/* The lamp's own breath: the same glow at full strength, faded in and out.
+   The glyph sits above it, so only the light behind moves. */
+.lamp::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--vermilion) 55%, transparent) 0%, transparent 74%);
 }
 
 .readout { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
@@ -135,23 +175,19 @@ body {
 .lit-wait .delta, .lit-off .delta { color: var(--ink-faint); }
 
 /* The only animation in the whole widget. A thing that moves in the corner of
-   your eye all day gets moved off the screen. */
-.lit-call { animation: breathe 3.6s ease-in-out infinite; }
-.lit-call .lamp { animation: lamp-breathe 3.6s ease-in-out infinite; }
+   your eye all day gets moved off the screen.
+   Both halves animate opacity, which always interpolates, so this reads as a
+   breath rather than a switch. */
+.stack.lit-call::after { animation: breathe 3.6s ease-in-out infinite; }
+.lit-call .lamp::after { animation: breathe 3.6s ease-in-out infinite; }
 
 @keyframes breathe {
-  0%, 100% { box-shadow: 0 1px 2px rgba(0,0,0,.1), 0 8px 22px -12px rgba(0,0,0,.4), 0 0 0 3px color-mix(in srgb, var(--vermilion) 20%, transparent); }
-  50%      { box-shadow: 0 1px 2px rgba(0,0,0,.1), 0 8px 26px -12px color-mix(in srgb, var(--vermilion) 50%, transparent), 0 0 0 9px color-mix(in srgb, var(--vermilion) 5%, transparent); }
-}
-
-@keyframes lamp-breathe {
-  0%, 100% { background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--vermilion) 20%, transparent) 0%, transparent 68%), var(--paper-sunk); }
-  50%      { background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--vermilion) 55%, transparent) 0%, transparent 74%), var(--paper-sunk); }
+  0%, 100% { opacity: .3; }
+  50%      { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lit-call, .lit-call .lamp { animation: none; }
-  .lit-call { box-shadow: 0 1px 2px rgba(0,0,0,.1), 0 8px 22px -12px rgba(0,0,0,.4), 0 0 0 3px color-mix(in srgb, var(--vermilion) 22%, transparent); }
+  .stack.lit-call::after, .lit-call .lamp::after { animation: none; opacity: .55; }
 }
 
 /* ── The strip ──────────────────────────────────────────── */
@@ -602,3 +638,67 @@ body {
   pointer-events: none;
   text-decoration: none;
 }
+
+/* ── The open bar's timeline ─────────────────────────────
+   Three times taller once there is room for it, with the hours marked and the
+   entries named inside their own blocks. Closed it stays the 9px strip: at
+   292px wide there is nothing a label could say. */
+.track.tall { height: 30px; border-radius: 5px; }
+.track.tall .seg { top: 4px; bottom: 4px; border-radius: 3px; }
+
+.ticks { position: absolute; inset: 0; pointer-events: none; }
+.tick { position: absolute; top: 0; bottom: 0; width: 1px; background: color-mix(in srgb, var(--ink) 11%, transparent); }
+
+.seg-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 7px;
+  font-size: 10px;
+  color: var(--paper-raised);
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
+}
+.seg.rest .seg-label { color: var(--ink-soft); }
+.seg.gap .seg-label { color: var(--lamp); }
+.phase-referencing .seg.work.unref .seg-label { color: var(--vermilion); }
+
+/* The day's own edges. Marks, not shading: the shading before the start was a
+   wash you had to learn to read, where a line says the same thing at once. */
+.mark {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--ink-soft);
+}
+.mark.soft { background: color-mix(in srgb, var(--ink) 42%, transparent); }
+
+/* The clock underneath, positioned rather than spread, so each reading sits
+   under the minute it names. */
+.scale {
+  position: relative;
+  height: 13px;
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.scale span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.scale .edge { color: var(--ink-soft); }
+
+/* ── The ledger's header carries the actions now ─────────
+   They were taking a third of the bar's width permanently for things pressed
+   a few times a day, and they belong beside the rows they act on. */
+.slab-head { flex-wrap: wrap; }
+.slab-head .actions { margin-left: auto; }
+.slab .slab-hint { margin: 0 0 8px; }
+
+/* ── The filing panel, three rows ───────────────────────── */
+.fld-three { grid-column: span 3; }
+.panel-acts { display: flex; gap: 8px; align-items: center; }
+.editor .panel-note { margin-top: 10px; }

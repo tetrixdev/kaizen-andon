@@ -8,12 +8,14 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+const stack = document.getElementById('stack');
 const card = document.getElementById('card');
 const lamp = document.getElementById('lamp');
 const delta = document.getElementById('delta');
 const deltaLabel = document.getElementById('deltaLabel');
 const sub = document.getElementById('sub');
 const track = document.getElementById('track');
+const scale = document.getElementById('scale');
 const slab = document.getElementById('slab');
 const slabTitle = document.getElementById('slabTitle');
 const slabHint = document.getElementById('slabHint');
@@ -113,10 +115,35 @@ const toMinutes = (t) => {
 };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-function windowBounds(l) {
-  const match = /(\d{2}:\d{2})\D+(\d{2}:\d{2})/.exec(l.window ?? '');
-  const open = match ? toMinutes(match[1]) : 8 * 60;
-  const close = match ? toMinutes(match[2]) : 18 * 60;
+/**
+ * What the bar spans.
+ *
+ * The context's window is the frame: 08:00 to 18:00 stays 08:00 to 18:00 all
+ * day, so the picture does not rescale under you every time something is
+ * filed. The one thing that may stretch it is evidence. Work at 19:30 is real
+ * work, and a bar that stopped at 18:00 would simply not draw it, so anything
+ * actually recorded pulls the edge out to meet it.
+ *
+ * `now` deliberately does NOT stretch it. A bar that grew all evening because
+ * the clock kept moving would rescale the whole day for nothing; when the time
+ * is off the end, the now-line is simply not drawn.
+ */
+function dayBounds(l) {
+  const match = /(\d{1,2}:\d{2})\D+(\d{1,2}:\d{2})/.exec(l.window ?? '');
+  let open = match ? toMinutes(match[1]) : 8 * 60;
+  let close = match ? toMinutes(match[2]) : 18 * 60;
+
+  const edges = [];
+  for (const e of l.entries ?? []) edges.push(toMinutes(e.from), toMinutes(e.to));
+  for (const g of l.gaps ?? []) edges.push(toMinutes(g.from), toMinutes(g.to));
+  if (l.started_at) edges.push(toMinutes(l.started_at));
+  if (l.ended_at) edges.push(toMinutes(l.ended_at));
+
+  for (const at of edges) {
+    open = Math.min(open, at);
+    close = Math.max(close, at);
+  }
+
   return { open, span: Math.max(60, close - open) };
 }
 
@@ -126,21 +153,64 @@ function place(from, to, open, span) {
   return `left:${left}%;width:${width}%`;
 }
 
-function renderTrack(l) {
-  const { open, span } = windowBounds(l);
-  const parts = [];
+const at = (minutes, open, span) => `left:${Math.max(0, Math.min(100, ((minutes - open) / span) * 100))}%`;
 
-  // Before the start is dead ground: not work, not rest, not a hole. An empty
-  // track would read exactly like time somebody forgot to account for.
-  if (l.started_at) {
-    const started = toMinutes(l.started_at);
-    if (started > open) parts.push(`<span class="seg dead" style="${place(open, started, open, span)}"></span>`);
+/** Hour ticks, drawn from the real bounds rather than assumed to be ten. */
+function hourTicks(open, span) {
+  const ticks = [];
+
+  for (let minute = Math.ceil(open / 60) * 60; minute < open + span; minute += 60) {
+    ticks.push(`<span class="tick" style="${at(minute, open, span)}"></span>`);
   }
 
-  // Time that has not happened yet is not a hole and must not read like one.
-  // Kaizen only ever reports gaps up to now, so without this the rest of the
-  // day is bare track, which is the same thing an unaccounted span looks like
-  // at a glance.
+  return ticks.join('');
+}
+
+/** The clock beneath the bar, at whatever spacing keeps it readable. */
+function renderScale(l, open, span) {
+  if (!expanded) {
+    scale.hidden = true;
+    return;
+  }
+
+  const width = track.clientWidth || 1000;
+  const step = Math.max(60, Math.ceil(span / Math.max(2, Math.floor(width / 110)) / 60) * 60);
+  const marks = [];
+  const edges = [];
+  if (l.started_at) edges.push(['start', toMinutes(l.started_at), l.started_at]);
+  if (l.ended_at) edges.push(['end', toMinutes(l.ended_at), l.ended_at]);
+
+  // A minute of the day is worth about this many pixels, so a reading needs
+  // roughly this much room before it collides with its neighbour.
+  const crowded = (minute) => edges.some(([, when]) =>
+    Math.abs(((minute - when) / span) * width) < 62);
+
+  for (let minute = Math.ceil(open / 60) * 60; minute <= open + span; minute += step) {
+    if (crowded(minute)) continue;
+    marks.push(`<span style="${at(minute, open, span)}">${clock(minute)}</span>`);
+  }
+
+  // The two readings that are not hours: when the day actually began and ended.
+  for (const [name, when, label] of edges) {
+    marks.push(`<span class="edge" style="${at(when, open, span)}">${name} ${esc(label)}</span>`);
+  }
+
+  scale.innerHTML = marks.join('');
+  scale.hidden = false;
+}
+
+function renderTrack(l) {
+  const { open, span } = dayBounds(l);
+  const parts = [];
+  const wide = expanded;
+  const pixels = track.clientWidth || 292;
+
+  track.classList.toggle('tall', wide);
+  if (wide) parts.push(`<span class="ticks">${hourTicks(open, span)}</span>`);
+
+  // Time that has not happened yet is not a hole. Kaizen only reports gaps up
+  // to now, so without this the rest of the day is bare track, which is what
+  // an unaccounted span looks like at a glance.
   if (!viewDate) {
     const nowMin = nowMinutes();
     if (nowMin < open + span) {
@@ -157,33 +227,47 @@ function renderTrack(l) {
     const key = e.id != null ? `e${e.id}` : `i${index}`;
     const pin = pinned === key ? ' pinned' : '';
 
+    // A label only where one fits. Two clipped letters inside a fifteen
+    // minute block is noise pretending to be information.
+    const room = ((to - from) / span) * pixels;
+    const name = e.description ?? (e.kind === 'work' ? 'Work' : 'Rest');
+    const label = wide && room > 78 ? `<span class="seg-label">${esc(name)}</span>` : '';
+
     if (e.kind === 'work') {
       alt = !alt;
-      // Phase 2 turns the alternation off: once the question is whether it
-      // reached the other system, which block is which stops mattering.
       const unref = l.logs_externally && !e.referenced ? ' unref' : '';
-      parts.push(`<span class="seg work${alt ? ' alt' : ''}${unref}${pin}" data-kind="entry" data-key="${key}" data-index="${index}" style="${place(from, to, open, span)}"></span>`);
+      parts.push(`<span class="seg work${alt ? ' alt' : ''}${unref}${pin}" data-kind="entry" data-key="${key}" data-index="${index}" style="${place(from, to, open, span)}">${label}</span>`);
     } else {
       alt = false;
-      parts.push(`<span class="seg rest${pin}" data-kind="entry" data-key="${key}" data-index="${index}" style="${place(from, to, open, span)}"></span>`);
+      parts.push(`<span class="seg rest${pin}" data-kind="entry" data-key="${key}" data-index="${index}" style="${place(from, to, open, span)}">${label}</span>`);
     }
   }
 
   for (const [index, g] of (l.gaps ?? []).entries()) {
     const key = `g${index}`;
-    parts.push(`<span class="seg gap${pinned === key ? ' pinned' : ''}" data-kind="gap" data-key="${key}" data-index="${index}" style="${place(toMinutes(g.from), toMinutes(g.to), open, span)}"></span>`);
+    const room = ((toMinutes(g.to) - toMinutes(g.from)) / span) * pixels;
+    const label = wide && room > 78 ? `<span class="seg-label">${hhmm(g.minutes)} unaccounted</span>` : '';
+    parts.push(`<span class="seg gap${pinned === key ? ' pinned' : ''}" data-kind="gap" data-key="${key}" data-index="${index}" style="${place(toMinutes(g.from), toMinutes(g.to), open, span)}">${label}</span>`);
   }
 
-  // A finished day has no now, so a past day gets no hairline. Drawing one
-  // would put "now" somewhere inside a day that ended hours ago.
+  // The day's own edges, as marks rather than as shading. The end is drawn
+  // lighter than the start: one is a fact about when you arrived, the other a
+  // decision you made to stop.
+  if (l.started_at) parts.push(`<span class="mark" style="${at(toMinutes(l.started_at), open, span)}"></span>`);
+  if (l.ended_at) parts.push(`<span class="mark soft" style="${at(toMinutes(l.ended_at), open, span)}"></span>`);
+
+  // Now keeps showing after the day is called: the day being over does not
+  // stop it being half past four. It is dropped only when the time is off the
+  // end of the bar, where drawing it would mean drawing it in the wrong place.
   if (!viewDate) {
     const nowMin = nowMinutes();
     if (nowMin > open && nowMin < open + span) {
-      parts.push(`<span class="now" style="left:${((nowMin - open) / span) * 100}%"></span>`);
+      parts.push(`<span class="now" style="${at(nowMin, open, span)}"></span>`);
     }
   }
 
   track.innerHTML = parts.join('');
+  renderScale(l, open, span);
 }
 
 function renderEntries(l) {
@@ -222,8 +306,8 @@ function renderEntries(l) {
 function render(l) {
   ledger = l;
 
-  card.classList.remove(...STATE_CLASSES, 'phase-accounting', 'phase-referencing');
-  card.classList.add(LAMP_FOR[l.state] ?? 'lit-wait', `phase-${l.phase}`);
+  stack.classList.remove(...STATE_CLASSES, 'phase-accounting', 'phase-referencing');
+  stack.classList.add(LAMP_FOR[l.state] ?? 'lit-wait', `phase-${l.phase}`);
 
   lamp.textContent = l.phase === 'referencing' ? '印' : '灯';
 
@@ -295,8 +379,8 @@ function render(l) {
 /** A day with no context carrying a target is not an error. */
 function renderIdle(message) {
   ledger = null;
-  card.classList.remove(...STATE_CLASSES);
-  card.classList.add('lit-off');
+  stack.classList.remove(...STATE_CLASSES);
+  stack.classList.add('lit-off');
   lamp.textContent = '灯';
   delta.textContent = '—:—';
   deltaLabel.textContent = '';
@@ -362,9 +446,7 @@ function contentHeight() {
   const style = getComputedStyle(document.body);
   // [data-floating] is out of flow (the segment popover), so counting it would
   // make the window grow by the height of a card that is drawn over the top.
-  const panels = [...document.body.children].filter(
-    (el) => el.tagName !== 'SCRIPT' && !el.hidden && !el.hasAttribute('data-floating'),
-  );
+  const panels = [...stack.children].filter((el) => !el.hidden);
 
   // Which panel is on top changes with what is open, and the stack has to read
   // as one card rather than a pile of separately rounded boxes.
@@ -374,8 +456,7 @@ function contentHeight() {
   card.classList.toggle('stacked', panels[0] !== card);
 
   return Math.ceil(
-    panels.reduce((total, el) => total + el.getBoundingClientRect().height, 0) +
-      (parseFloat(style.rowGap) || 0) * Math.max(0, panels.length - 1) +
+    stack.getBoundingClientRect().height +
       parseFloat(style.paddingTop) +
       parseFloat(style.paddingBottom),
   );
@@ -409,12 +490,31 @@ function fit(force = false) {
 // Any panel changing size for any reason resizes the window. This is what
 // makes it unnecessary to remember to call anything after changing any text,
 // and what makes a screen that does not exist yet work without being taught.
+// EVERY panel, not a hand-picked few. The editor was left out, so an error
+// message wrapping to three lines inside it changed the height and nothing
+// asked for a bigger window: the panel simply grew off the top of the screen.
 const sizes = new ResizeObserver(() => fit());
-for (const panel of [slab, setup, card]) sizes.observe(panel);
+for (const panel of stack.children) sizes.observe(panel);
+
+/**
+ * Redraw the timeline when it actually changes width.
+ *
+ * How much a block can say depends on how many pixels it gets, and the window
+ * resize lands a frame after the click. Drawing once on click meant measuring
+ * the 292px card and then being shown at 1222: every label was suppressed and
+ * the clock underneath fell back to one reading every five hours.
+ */
+let trackWidth = 0;
+new ResizeObserver(() => {
+  const width = Math.round(track.clientWidth);
+  if (width === trackWidth || !ledger) return;
+
+  trackWidth = width;
+  renderTrack(ledger);
+}).observe(track);
 
 function toggle() {
   expanded = !expanded;
-  actions.hidden = !expanded;
   card.classList.toggle('open', expanded);
 
   // Collapsing puts everything away: the editor and the grid only make sense
@@ -426,6 +526,9 @@ function toggle() {
   }
   slab.hidden = !expanded || !editor.hidden || !history.hidden;
 
+  // The timeline is drawn differently open than closed, so it is redrawn
+  // rather than merely restyled: labels only exist where there is room.
+  if (ledger) renderTrack(ledger);
   fit(true);
 }
 
