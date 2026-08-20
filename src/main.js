@@ -510,11 +510,38 @@ function fit(force = false) {
 }
 
 // Out faster than in, and linear: a curve on an opacity change reads as a
-// stutter. A tenth of a second each way is where every house style lands for
-// something this small, and the whole swap stays far under the point at which
-// a transition starts to feel like waiting.
-const FADE_OUT = 90;
-const pause = (ms) => new Promise((done) => setTimeout(done, ms));
+// stutter. Around a tenth of a second each way is where every house style
+// lands for something this small, and the whole swap stays far under the point
+// at which a transition starts to feel like waiting.
+const FADE_OUT = 70;
+
+/**
+ * Wait for the card to have actually gone.
+ *
+ * Not a timer. A transition does not begin until the next style recalculation
+ * after the class lands, which is up to a frame later, so a timer set to the
+ * duration fires while the card is still visibly fading and the swap happens
+ * in plain sight. The event knows when it is finished; nothing else does.
+ */
+function faded() {
+  return new Promise((done) => {
+    const finish = () => {
+      stack.removeEventListener('transitionend', watch);
+      clearTimeout(failsafe);
+      done();
+    };
+
+    const watch = (event) => {
+      if (event.target === stack && event.propertyName === 'opacity') finish();
+    };
+
+    stack.addEventListener('transitionend', watch);
+
+    // Nothing to fade (already invisible, or transitions disabled) means no
+    // event will ever arrive, and the card must not be stuck hidden.
+    const failsafe = setTimeout(finish, FADE_OUT + 150);
+  });
+}
 
 /**
  * Change what the card is showing, across a fade.
@@ -534,7 +561,7 @@ async function swap(change) {
   }
 
   stack.classList.add('swapping');
-  await pause(FADE_OUT);
+  await faded();
 
   change();
   await resize();

@@ -779,7 +779,7 @@ body {
    faster than in, which is what makes it feel like a response rather than a
    transition. */
 .stack { transition: opacity 130ms linear; }
-.stack.swapping { opacity: 0; transition-duration: 90ms; }
+.stack.swapping { opacity: 0; transition-duration: 70ms; }
 
 @media (prefers-reduced-motion: reduce) {
   .stack { transition: none; }

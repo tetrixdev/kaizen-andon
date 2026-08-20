@@ -1135,7 +1135,9 @@ test('opening fades out and back in, with the resize hidden inside it', async ({
   const seen = await page.evaluate(() => window.__opacity);
   expect(seen.length, 'the window was asked to move').toBeGreaterThan(1);
   expect(seen[0], 'the first placement is not a swap').toBe(1);
-  expect(seen[seen.length - 1], 'nothing was visible while it opened').toBeLessThan(0.05);
+  // Exactly gone, not nearly gone: waiting on a timer instead of the event
+  // meant the swap happened while the card was still fading.
+  expect(seen[seen.length - 1], 'nothing was visible while it opened').toBe(0);
 
   // It comes back.
   await expect
@@ -1153,7 +1155,7 @@ test('opening fades out and back in, with the resize hidden inside it', async ({
   });
 
   // Out faster than in, and linear, which is what a fade wants.
-  expect(timing.away).toBe('0.09s');
+  expect(timing.away).toBe('0.07s');
   expect(timing.back).toBe('0.13s');
   expect(timing.easing).toBe('linear');
 });
