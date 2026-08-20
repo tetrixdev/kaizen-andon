@@ -75,7 +75,38 @@ let pinned = null;
 /** The entry being edited, or null for a new one. */
 let editingId = null;
 
+/**
+ * A DURATION. Five and a half hours is 5:30, never 05:30: padding an amount
+ * makes it look like a time of day.
+ */
 const hhmm = (m) => `${Math.floor(Math.max(0, m) / 60)}:${String(Math.max(0, m) % 60).padStart(2, '0')}`;
+
+/**
+ * A TIME OF DAY, always padded.
+ *
+ * These two were one function, and every quick action that landed before ten
+ * in the morning produced "9:17". Kaizen validates `H:i`, which requires the
+ * zero, so the entry was refused by the server after the widget had already
+ * accepted it, which reads as the app being broken rather than the format
+ * being wrong.
+ */
+const clock = (m) => {
+  const total = ((Math.round(m) % 1440) + 1440) % 1440;
+
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+};
+
+/** Whatever the user typed, in the form Kaizen accepts. `9:5` is 09:05. */
+const normaliseClock = (text) => {
+  const match = /^\s*(\d{1,2})\s*[:.]\s*(\d{1,2})\s*$/.exec(String(text ?? ''));
+  if (!match) return null;
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return null;
+
+  return clock(hours * 60 + minutes);
+};
 const toMinutes = (t) => {
   const [h, m] = String(t ?? '0:00').split(':').map(Number);
   return (h || 0) * 60 + (m || 0);
@@ -93,21 +124,6 @@ function place(from, to, open, span) {
   const left = Math.max(0, Math.min(100, ((from - open) / span) * 100));
   const width = Math.max(0.6, Math.min(100 - left, ((to - from) / span) * 100));
   return `left:${left}%;width:${width}%`;
-}
-
-/**
- * Where "now" falls on the track, in minutes past midnight.
- *
- * Kaizen's clock, not this machine's. The server knows the account's timezone
- * and the day being drawn is its day, so a laptop set to another zone would
- * otherwise put the now-line and the not-yet cover hours away from the truth
- * while every number beside them stayed right. The browser clock is only a
- * fallback for the moment before the first answer arrives.
- */
-function nowMinutes() {
-  if (localNow) return toMinutes(localNow);
-  const now = new Date();
-  return now.getHours() * 60 + now.getMinutes();
 }
 
 function renderTrack(l) {
@@ -554,7 +570,7 @@ async function failed(where, doing, error, args = null) {
       `What it said:      ${message}`,
       '',
       `When:    ${new Date().toISOString()}`,
-      `Viewing: ${viewDate ?? 'today'}${localNow ? ` (Kaizen clock ${localNow})` : ''}`,
+      `Viewing: ${viewDate ?? 'today'}${started ? ` (Kaizen clock ${nowLabel()})` : ''}`,
       `Context: ${ledger?.context ?? 'none loaded'}`,
       args ? `Arguments: ${JSON.stringify(args)}` : null,
       '',
@@ -708,7 +724,7 @@ popSplit.addEventListener('click', (event) => {
   closePop();
   if (!entry) return;
 
-  const middle = hhmm(Math.round((toMinutes(entry.from) + toMinutes(entry.to)) / 2));
+  const middle = clock(Math.round((toMinutes(entry.from) + toMinutes(entry.to)) / 2));
   openEditor({ entry, splitAt: middle });
 });
 
@@ -728,12 +744,40 @@ popDelete.addEventListener('click', async (event) => {
 
 // ── Filing ──────────────────────────────────────────────────────────────
 
-/** The clock as Kaizen reports it, so "to now" agrees with the server's day. */
-let localNow = null;
+/**
+ * Kaizen's clock, kept running between polls.
+ *
+ * Only the offset comes from the server. Reading `local_time` straight off the
+ * last answer means every clock in the widget is as stale as the last poll,
+ * which is up to five minutes: the now-line stops advancing, the cover over
+ * time that has not happened stops moving with it, and "the whole gap" fills
+ * in an end that was true when the page last asked. Anchoring the server's
+ * time to a local stopwatch keeps the timezone right and the minute live.
+ */
+let started = null;
+
+function setClock(reported) {
+  if (reported) started = { minutes: toMinutes(reported), at: Date.now() };
+}
+
+/** Now, in minutes past midnight, in the account's own timezone. */
+function nowMinutes() {
+  if (!started) {
+    const now = new Date();
+    return now.getHours() * 60 + now.getMinutes();
+  }
+
+  return (started.minutes + Math.floor((Date.now() - started.at) / 60000)) % 1440;
+}
+
+/** Now as a clock reading, or null before the server has ever answered. */
+function nowLabel() {
+  return started ? clock(nowMinutes()) : null;
+}
 
 /** Render a whole day response, or say plainly that nothing carries a target. */
 function apply(day) {
-  localNow = day.local_time ?? localNow;
+  setClock(day.local_time);
   const leading = pickLeading(day.ledgers ?? []);
 
   if (!leading) {
@@ -768,12 +812,12 @@ function quickChips(gap) {
   // Marking a moment moves ONE field, and it usually moves backwards: the
   // button is pressed when you remember, not when it happened.
   if (editorMode !== 'entry') {
-    if (localNow) chips.push(['Now', () => { editFrom.value = localNow; }]);
+    if (started) chips.push(['Now', () => { editFrom.value = nowLabel(); }]);
 
     for (const [label, minutes] of [['5m ago', 5], ['15m ago', 15], ['30m ago', 30], ['1h ago', 60]]) {
       chips.push([label, () => {
-        const from = toMinutes(editFrom.value || localNow || '09:00');
-        editFrom.value = hhmm(Math.max(0, from - minutes));
+        const from = toMinutes(editFrom.value || nowLabel() || '09:00');
+        editFrom.value = clock(Math.max(0, from - minutes));
       }]);
     }
 
@@ -790,13 +834,21 @@ function quickChips(gap) {
     return;
   }
 
-  if (gap) chips.push(['The whole gap', () => { editFrom.value = gap.from; editTo.value = gap.to; }]);
-  if (localNow && !viewDate) chips.push(['To now', () => { editTo.value = localNow; }]);
+  // The whole gap runs to NOW, not to where the hole reached when the page
+  // last asked. An open hole has no end yet: its end is whatever time it is
+  // when you decide to account for it. That also makes a separate "to now"
+  // chip a second name for the same button, so there is only one.
+  if (gap) {
+    chips.push(['The whole gap', () => {
+      editFrom.value = gap.from;
+      editTo.value = viewDate ? gap.to : clock(Math.max(toMinutes(gap.to), nowMinutes()));
+    }]);
+  }
 
   for (const [label, minutes] of [['15m', 15], ['30m', 30], ['1h', 60], ['2h', 120]]) {
     chips.push([label, () => {
       const from = toMinutes(editFrom.value || gap?.from || '09:00');
-      editTo.value = hhmm(from + minutes);
+      editTo.value = clock(from + minutes);
     }]);
   }
 
@@ -840,7 +892,7 @@ function openEditor({ gap = null, entry = null, splitAt: at = null, mode = 'entr
     editorTitle.textContent = starting ? 'When did the day start?' : 'When did the day end?';
     editFromLabel.textContent = starting ? 'Started at' : 'Ended at';
     editorSave.textContent = starting ? 'Start the day' : 'Call it a day';
-    editFrom.value = (starting ? ledger?.started_at : ledger?.ended_at) ?? localNow ?? '';
+    editFrom.value = (starting ? ledger?.started_at : ledger?.ended_at) ?? nowLabel() ?? '';
     quickChips(null);
     onlyPanel('editor');
     editFrom.focus();
@@ -859,8 +911,8 @@ function openEditor({ gap = null, entry = null, splitAt: at = null, mode = 'entr
     editorTitle.textContent = entry ? 'Edit this entry' : 'Account for a span';
   }
 
-  editFrom.value = entry?.from ?? gap?.from ?? localNow ?? '';
-  editTo.value = at ?? entry?.to ?? gap?.to ?? localNow ?? '';
+  editFrom.value = entry?.from ?? gap?.from ?? nowLabel() ?? '';
+  editTo.value = at ?? entry?.to ?? gap?.to ?? nowLabel() ?? '';
   editWhat.value = entry?.description ?? '';
   editRef.value = entry?.reference ?? '';
   editLink.value = entry?.link ?? '';
@@ -877,8 +929,6 @@ function closeEditor() {
   onlyPanel(expanded ? 'slab' : null);
 }
 
-const CLOCK = /^\d{1,2}:\d{2}$/;
-
 function complain(text) {
   clearFailure(editorNote);
   editorNote.classList.add('bad');
@@ -887,9 +937,11 @@ function complain(text) {
 
 /** Mark the start or the end of the day, at the time actually typed. */
 async function markMoment() {
-  const at = editFrom.value.trim();
+  const at = normaliseClock(editFrom.value);
 
-  if (!CLOCK.test(at)) return complain('A time reads as 13:45.');
+  if (!at) return complain('A time reads as 13:45.');
+
+  editFrom.value = at;
 
   editorSave.disabled = true;
   clearFailure(editorNote);
@@ -914,12 +966,18 @@ async function markMoment() {
 async function fileEntries() {
   if (editorMode !== 'entry') return markMoment();
 
-  const from = editFrom.value.trim();
-  const to = editTo.value.trim();
+  // Normalised before anything else: Kaizen validates H:i, so "9:17" is
+  // refused by the server after the widget has already accepted it, which
+  // reads as the app being broken rather than the hour needing its zero.
+  const from = normaliseClock(editFrom.value);
+  const to = normaliseClock(editTo.value);
 
-  if (!CLOCK.test(from) || !CLOCK.test(to)) {
+  if (!from || !to) {
     return complain('Both times read as 13:45.');
   }
+
+  editFrom.value = from;
+  editTo.value = to;
 
   const common = {
     kind: currentKind(),
@@ -955,6 +1013,12 @@ async function fileEntries() {
     editorSave.disabled = false;
   }
 }
+
+editKind.addEventListener('click', (event) => {
+  event.stopPropagation();
+  const button = event.target.closest('.toggle-btn');
+  if (button) setKind(button.dataset.kind);
+});
 
 editorSave.addEventListener('click', (e) => { e.stopPropagation(); fileEntries(); });
 document.getElementById('editorClose').addEventListener('click', (e) => { e.stopPropagation(); closeEditor(); });

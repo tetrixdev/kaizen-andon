@@ -394,6 +394,46 @@ test('the month says what it adds up to, counting only claimed days', async ({ p
   await expect(page.locator('#monthSummary')).toContainText('day still open');
 });
 
+test('the kind toggle actually toggles', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+  await page.locator('#addBtn').click();
+
+  await expect(page.locator('.toggle-btn[data-kind="work"]')).toHaveClass(/on/);
+  await page.locator('.toggle-btn[data-kind="rest"]').click();
+  await expect(page.locator('.toggle-btn[data-kind="rest"]')).toHaveClass(/on/);
+  await expect(page.locator('.toggle-btn[data-kind="work"]')).not.toHaveClass(/on/);
+
+  await page.locator('#editorSave').click();
+  const sent = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'save_entries').pop()[1]);
+  expect(sent.entries[0].kind, 'half of closing a hole is admitting it was not work').toBe('rest');
+});
+
+test('the whole gap runs to now, not to where it reached last poll', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+
+  // The fixture's hole ends at 14:35 and Kaizen's clock said 14:20 at the last
+  // poll. Wind the local stopwatch on: an open hole ends whenever you get to
+  // it, not when the page last asked.
+  await page.evaluate(() => { window.__now = Date.now; Date.now = () => window.__now() + 40 * 60 * 1000; });
+
+  await page.locator('#track .seg.gap').first().click();
+  await page.getByRole('button', { name: 'The whole gap' }).click();
+  await expect(page.locator('#editFrom')).toHaveValue('13:00');
+  await expect(page.locator('#editTo'), 'the clock kept running between polls').toHaveValue('15:00');
+
+  // One button, not two names for it.
+  await expect(page.getByRole('button', { name: 'To now' })).toHaveCount(0);
+});
+
 test('quick actions fill the span without typing', async ({ page }) => {
   await page.setViewportSize({ width: 292, height: 88 });
   await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
@@ -402,11 +442,14 @@ test('quick actions fill the span without typing', async ({ page }) => {
 
   await open(page);
   await page.locator('#addBtn').click();
-  await page.getByRole('button', { name: 'To now' }).click();
-  await expect(page.locator('#editTo')).toHaveValue('14:20');
 
+  // Add entry opens on the first open hole, so From is already 13:00.
+  await expect(page.locator('#editFrom')).toHaveValue('13:00');
   await page.getByRole('button', { name: '30m' }).click();
   await expect(page.locator('#editTo')).toHaveValue('13:30');
+
+  await page.getByRole('button', { name: '2h' }).click();
+  await expect(page.locator('#editTo')).toHaveValue('15:00');
 });
 
 test('the bar still holds together on a narrow screen', async ({ page }) => {
@@ -699,4 +742,41 @@ test('the link field gets a whole row, being the longest thing here', async ({ p
   }));
   expect(widths.link).toBeGreaterThan(widths.what);
   expect(widths.link / widths.grid, 'a URL gets the full row').toBeGreaterThan(0.9);
+});
+
+test('a time before ten in the morning keeps its zero', async ({ page }) => {
+  // The exact failure from the field: a quick action produced "9:17", Kaizen
+  // validates H:i, and the entry was refused after the widget had accepted it.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED,
+    { ledgers: [LEDGER({ started_at: '08:47', gaps: [{ from: '08:47', to: '09:17', minutes: 30 }], entries: [] })] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+
+  await page.locator('#track .seg.gap').first().click();
+  await settle(page);
+  await expect(page.locator('#editFrom')).toHaveValue('08:47');
+  await page.getByRole('button', { name: '30m' }).click();
+  await expect(page.locator('#editTo'), 'padded, not 9:17').toHaveValue('09:17');
+
+  // And whatever gets typed is normalised rather than refused later.
+  await page.locator('#editTo').fill('9:5');
+  await page.locator('#editorSave').click();
+
+  const sent = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'save_entries').pop()[1]);
+  expect(sent.entries[0].to).toBe('09:05');
+  expect(sent.entries[0].from).toBe('08:47');
+});
+
+test('a duration is not padded, because it is not a time', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED,
+    { ledgers: [LEDGER({ gap_minutes: 331, state: 'call' })] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  // Five and a half hours is 5:31. "05:31" would read as half past five.
+  await expect(page.locator('#delta')).toHaveText('5:31');
 });
