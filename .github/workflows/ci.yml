@@ -33,7 +33,7 @@ jobs:
           # can only read what the default branch left behind. A key derived
           # from the job name meant the release matched nothing and downloaded
           # and compiled all 292 crates every single time.
-          shared-key: windows-src-tauri
+          shared-key: windows-debug
 
       # Every step runs even after one fails. Written from a machine with no
       # Rust on it, so a run that stops at the first problem costs a whole
@@ -73,3 +73,38 @@ jobs:
             [[ "$step" == *failure ]] && fail=1
           done
           exit $fail
+
+  # Keep a release-profile cache warm on the default branch.
+  #
+  # A release runs on its own tag, and GitHub only lets a tag read caches made
+  # on the default branch, so whatever main has built is all a release can ever
+  # start from. Main only ever built debug, which a release cannot use: it
+  # recompiled all 292 dependencies in release mode every single time.
+  #
+  # This is expensive exactly once, when a dependency actually changes. Every
+  # push after that restores and does nothing, because nothing it built has
+  # moved. It runs beside the checks rather than in front of them, so it never
+  # delays the answer to "is this branch good".
+  warm:
+    if: github.event_name == 'push'
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          # The key the release job reads. Separate from the checks', because
+          # the two profiles share no artifacts.
+          shared-key: windows-release
+
+      # The dependencies, not the bundle: no NSIS, no signing, no upload. The
+      # point is only that the release finds them already compiled.
+      - name: Build dependencies in release
+        working-directory: src-tauri
+        run: cargo build --release
