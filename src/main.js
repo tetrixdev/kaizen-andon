@@ -460,7 +460,8 @@ function contentHeight() {
   // the window is sized to its content, so unless its height is counted there
   // is nowhere above the card for it to open into, and it flips downward past
   // the bottom edge where it is simply cut off.
-  const floating = reserving ? POP_ROOM : 0;
+  // Nothing floating counts. The window never changes size to hold the detail
+  // card: it is drawn inside whatever room already exists.
 
   // Which panel is on top changes with what is open, and the stack has to read
   // as one card rather than a pile of separately rounded boxes.
@@ -471,7 +472,6 @@ function contentHeight() {
 
   return Math.ceil(
     stack.getBoundingClientRect().height +
-      floating +
       parseFloat(style.paddingTop) +
       parseFloat(style.paddingBottom),
   );
@@ -601,8 +601,6 @@ new ResizeObserver(() => {
 function toggle() {
   closePop();
 
-  reserving = false;
-
   return swap(() => {
     expanded = !expanded;
     card.classList.toggle('open', expanded);
@@ -626,42 +624,6 @@ function showSetup(show) {
   fit(true);
 }
 
-
-/**
- * Entering the card takes the room; leaving gives it back, but not at once.
- *
- * The delay is the whole point. Taking the room resizes the window, and a
- * window that changes size under a cursor can make the cursor look like it
- * left: one stale hit-test and the room is given back, the window shrinks, the
- * cursor is over the card again, and it starts over. That loop is what made
- * hovering jump, and it does not need a bug to start it, only a frame in which
- * the pointer and the layout disagree.
- *
- * Holding the room for a moment makes a spurious leave cost nothing: the
- * cursor is back long before the timer, and the window never moves.
- */
-const HOLD = 260;
-let releasing = null;
-
-card.addEventListener('mouseenter', () => {
-  clearTimeout(releasing);
-  if (expanded || reserving) return;
-
-  reserving = true;
-  fit(true);
-});
-
-card.addEventListener('mouseleave', () => {
-  clearTimeout(releasing);
-
-  releasing = setTimeout(() => {
-    if (!reserving) return;
-
-    reserving = false;
-    closePop();
-    fit(true);
-  }, HOLD);
-});
 
 sub.addEventListener('click', (event) => {
   const amend = event.target.closest('.amend');
@@ -858,6 +820,18 @@ function showPop(target, kind, index) {
     : item.description || (item.kind === 'work' ? 'Work' : 'Rest');
   popSpan.textContent = `${item.from}–${item.to} · ${hhmm(item.minutes)}`;
 
+  // Shut, the whole card is about a hundred pixels tall and there is no room
+  // above the strip for anything more than a line.
+  pop.classList.toggle('brief', !expanded);
+
+  if (!expanded) {
+    popBody.innerHTML = '';
+    popKey = `${kind}:${index}`;
+    reveal();
+
+    return;
+  }
+
   const lines = [];
   if (!isGap && ledger.logs_externally && item.kind === 'work') {
     lines.push(item.reference
@@ -875,21 +849,19 @@ function showPop(target, kind, index) {
 }
 
 /**
- * Room kept above the card for a segment's detail card.
+ * The detail card never resizes the window.
  *
- * Taken when the cursor ENTERS THE CARD, before any detail card exists, and
- * given back when it leaves. Not when the detail card appears, which is what
- * it used to be and which fed back on itself: showing it resized the window,
- * the resize moved the strip out from under the cursor, the cursor left the
- * strip, the card closed, the window shrank, the cursor landed on the strip
- * again. Fourteen resizes to cross the day once.
+ * It used to make room for itself, and that was the whole problem. Growing the
+ * window moves its TOP edge up, and the page is anchored to the bottom, so for
+ * a frame the webview still holds the old layout and draws it against the new
+ * top: the card visibly jumps up and then drops back as the reflow lands. Once
+ * per hover, and once per block while crossing the strip.
  *
- * Fixed rather than measured, so moving between blocks never changes the
- * window at all. A hundred and fifty holds five lines; the card is capped to
- * match so it can never want more than has been set aside.
+ * So it fits itself to the room there is. Open, the ledger above the strip is
+ * hundreds of pixels and the full card fits easily. Shut, there is almost
+ * nothing, so it says one line instead, which fits over the subtitle without
+ * needing a single pixel more window.
  */
-const POP_ROOM = 150;
-let reserving = false;
 let revealing = 0;
 
 /**

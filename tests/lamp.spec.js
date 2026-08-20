@@ -1069,46 +1069,6 @@ test('the rows read in clock order, holes among the entries', async ({ page }) =
   await expect(page.locator('#editFrom'), 'the first row is the first hole').toHaveValue('08:47');
 });
 
-test('the segment card opens upward, into room taken beforehand', async ({ page }) => {
-  // The widget lives in the bottom-right corner, so downward is off the edge
-  // of the screen. The room is taken when the cursor enters the CARD, before
-  // any detail card exists: taking it when the card appeared meant the resize
-  // moved the strip out from under the cursor and the whole thing flapped.
-  await page.setViewportSize({ width: 292, height: 88 });
-  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
-  await page.goto(PAGE);
-  await settle(page);
-
-  const before = await page.evaluate(() =>
-    window.__calls.filter(([c]) => c === 'place_window').pop()[1].height);
-
-  await page.locator('#delta').hover();
-  await page.waitForTimeout(80);
-  const reserved = await page.evaluate(() =>
-    window.__calls.filter(([c]) => c === 'place_window').pop()[1].height);
-  expect(reserved, 'entering the card takes the room').toBeGreaterThan(before);
-
-  await page.setViewportSize({ width: 292, height: reserved });
-  await page.locator('#track .seg.work').first().hover();
-  await expect(page.locator('#pop')).toBeVisible();
-
-  // Showing it costs no further resize: the room was already there.
-  const after = await page.evaluate(() =>
-    window.__calls.filter(([c]) => c === 'place_window').pop()[1].height);
-  expect(after).toBe(reserved);
-
-  const geom = await page.evaluate(() => {
-    const pop = document.getElementById('pop').getBoundingClientRect();
-    const seg = document.querySelector('#track .seg.work').getBoundingClientRect();
-    return { popBottom: pop.bottom, segTop: seg.top, popTop: pop.top,
-             popLeft: pop.left, popRight: pop.right, view: window.innerWidth };
-  });
-
-  expect(geom.popBottom, 'it sits above the segment').toBeLessThanOrEqual(geom.segTop + 1);
-  expect(geom.popTop, 'and inside the window').toBeGreaterThanOrEqual(0);
-  expect(geom.popLeft).toBeGreaterThanOrEqual(0);
-  expect(geom.popRight, 'pulled back inside the right edge').toBeLessThanOrEqual(geom.view);
-});
 
 test('opening fades out and back in, with the resize hidden inside it', async ({ page }) => {
   await page.setViewportSize({ width: 292, height: 88 });
@@ -1149,52 +1109,6 @@ test('opening fades out and back in, with the resize hidden inside it', async ({
   expect(timing.easing).toBe('linear');
 });
 
-test('sliding along the strip does not resize the window each time', async ({ page }) => {
-  // Every block is a different height, and the card used to be shown before
-  // there was room for it: it landed clamped against the top edge and moved
-  // once the window grew, on every single block.
-  await page.setViewportSize({ width: 292, height: 88 });
-  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
-  await page.goto(PAGE);
-  await settle(page);
-  await page.setViewportSize({ width: 292, height: 400 });
-
-  const asks = () => page.evaluate(() =>
-    window.__calls.filter(([c]) => c === 'place_window').length);
-
-  const before = await asks();
-  await page.locator('#track .seg[data-kind="entry"][data-index="0"]').hover();
-  await expect(page.locator('#pop')).toBeVisible();
-  const afterFirst = await asks();
-  expect(afterFirst, 'the first block pays for the room').toBeGreaterThan(before);
-
-  // The card must never be visible anywhere but above its own block.
-  for (const index of [2, 3, 0]) {
-    await page.locator(`#track .seg[data-kind="entry"][data-index="${index}"]`).hover();
-    await page.waitForTimeout(80);
-
-    const placed = await page.evaluate((i) => {
-      const pop = document.getElementById('pop');
-      const seg = document.querySelector(`#track .seg[data-kind="entry"][data-index="${i}"]`);
-      if (!seg || getComputedStyle(pop).visibility === 'hidden') return null;
-      const p = pop.getBoundingClientRect();
-      const s = seg.getBoundingClientRect();
-      return { above: p.bottom <= s.top + 1, clamped: p.top <= 7 };
-    }, index);
-
-    expect(placed, 'the card is shown').toBeTruthy();
-    expect(placed.above, `block ${index}: above its own block`).toBe(true);
-    expect(placed.clamped, `block ${index}: not jammed against the edge`).toBe(false);
-  }
-
-  // The reserve only grows, so a second pass over blocks already seen is free.
-  const settled = await asks();
-  for (const index of [2, 3, 0]) {
-    await page.locator(`#track .seg[data-kind="entry"][data-index="${index}"]`).hover();
-    await page.waitForTimeout(80);
-  }
-  expect(await asks(), 'going back over the same blocks costs nothing').toBe(settled);
-});
 
 test('sliding across the strip moves nothing and resizes once', async ({ page }) => {
   // Written after watching it, frame by frame, rather than reasoning about it.
@@ -1269,4 +1183,53 @@ test('sliding across the strip moves nothing and resizes once', async ({ page })
   expect(cardAt, 'the card holds one place on screen').toHaveLength(1);
   expect(popAt.length, 'so does the detail card').toBeLessThanOrEqual(2);
   expect(resizes, 'the room is taken once, not once per block').toBeLessThanOrEqual(2);
+});
+
+test('the detail card fits the room there is, and never asks for more', async ({ page }) => {
+  // Growing the window moves its top edge, and the page is anchored to the
+  // bottom, so for a frame the old layout is drawn against the new top and the
+  // whole card jumps up and drops back. The detail card therefore never
+  // resizes anything: it fits itself to what is already there.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  const asks = () => page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'place_window').length);
+  const before = await asks();
+
+  // Shut: one line, over the subtitle, inside the window as it stands.
+  await page.locator('#track .seg.work').first().hover();
+  await expect(page.locator('#pop')).toBeVisible();
+  await expect(page.locator('#pop')).toHaveClass(/brief/);
+  await expect(page.locator('#popBody')).toBeHidden();
+  await expect(page.locator('#popTitle')).toContainText('Ticket triage');
+
+  let box = await page.evaluate(() => {
+    const p = document.getElementById('pop').getBoundingClientRect();
+    return { top: p.top, bottom: p.bottom, height: p.height, view: window.innerHeight };
+  });
+  expect(box.top, 'inside the window').toBeGreaterThanOrEqual(0);
+  expect(box.bottom).toBeLessThanOrEqual(box.view);
+  expect(box.height, 'one line, not a card').toBeLessThan(40);
+  expect(await asks(), 'shut, it costs no resize').toBe(before);
+
+  // Open: the ledger above gives it hundreds of pixels, so it says everything.
+  await open(page);
+  const opened = await asks();
+
+  await page.locator('#track .seg.work').first().hover();
+  await expect(page.locator('#pop')).toBeVisible();
+  await expect(page.locator('#pop')).not.toHaveClass(/brief/);
+  await expect(page.locator('#popBody')).toContainText('REF-1042');
+
+  box = await page.evaluate(() => {
+    const p = document.getElementById('pop').getBoundingClientRect();
+    const seg = document.querySelector('#track .seg.work').getBoundingClientRect();
+    return { bottom: p.bottom, segTop: seg.top, top: p.top };
+  });
+  expect(box.bottom, 'above its own block').toBeLessThanOrEqual(box.segTop + 1);
+  expect(box.top).toBeGreaterThanOrEqual(0);
+  expect(await asks(), 'open, it costs no resize either').toBe(opened);
 });
