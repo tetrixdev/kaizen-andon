@@ -107,6 +107,14 @@ fn place_window(window: WebviewWindow, expanded: bool, height: Option<i32>) -> R
 
 /// The stored configuration: which Kaizen this is pointed at, and what the
 /// day currently looks like. Tokens never live here; they go to the OS
+/// The stored configuration: which Kaizen this is pointed at, and what the
+/// day currently looks like. Tokens never live here; they go to the OS
+/// credential store once the OAuth flow exists.
+#[tauri::command]
+fn load_config(app: AppHandle) -> Result<state::Config, String> {
+    state::Config::load(&app).map_err(|e| e.to_string())
+}
+
 /// Connect to a Kaizen: discover, register if this install has not before, and
 /// hand the browser the consent page. Blocks until the user comes back or
 /// three minutes pass, so it runs off the UI thread.
