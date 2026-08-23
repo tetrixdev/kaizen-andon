@@ -1,23 +1,28 @@
 //! The Win32 half, and nothing else.
 //!
-//! Everything here is unverifiable locally: there is no Rust on the dev box and
-//! `check.sh` type-checks on Linux, so this file is proven by Windows CI alone.
-//! That is the reason it answers three questions and holds no logic worth
-//! testing: bucketing, naming, dedup and sealing all live in `mod.rs`, where a
-//! container can reach them.
+//! This file is the one place a Linux `cargo check` used to skip entirely,
+//! because `#[cfg(windows)]` is not compiled for a target it does not apply to.
+//! A release once died here on three errors no local compiler had ever been
+//! given the chance to see. `check.sh` now checks the Windows target too, which
+//! costs one extra pass and catches exactly that.
+//!
+//! It still holds no logic worth testing: bucketing, naming, dedup and sealing
+//! all live in `mod.rs`, where a container can run them.
 
 use std::path::Path;
 
-use windows::core::PWSTR;
-use windows::Win32::Foundation::{CloseHandle, BOOL, HANDLE, HWND, LPARAM, MAX_PATH, RECT};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, MAX_PATH};
 use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 use windows::Win32::System::ProcessStatus::GetModuleBaseNameW;
 use windows::Win32::System::StationsAndDesktops::{
     CloseDesktop, OpenInputDesktop, DESKTOP_READOBJECTS,
 };
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
+// GetLastInputInfo lives under Input::KeyboardAndMouse, not WindowsAndMessaging
+// where the rest of the window calls are.
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetLastInputInfo, GetWindowTextW, GetWindowThreadProcessId, LASTINPUTINFO,
+    GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
 };
 
 use super::{Probe, Shot, Source};
@@ -47,11 +52,11 @@ impl Source for Screens {
         // Left to right by the monitor's own x, so the stored image matches the
         // desk rather than whatever order the API happened to enumerate in.
         let mut ordered: Vec<_> = monitors.into_iter().collect();
-        ordered.sort_by_key(|m| m.x().unwrap_or(0));
+        ordered.sort_by_key(|m| m.x());
 
         for monitor in ordered {
             let image = monitor.capture_image().map_err(|e| e.to_string())?;
-            let (x, y) = (monitor.x().unwrap_or(0), monitor.y().unwrap_or(0));
+            let (x, y) = (monitor.x(), monitor.y());
             shots.push(Shot {
                 x,
                 y,
