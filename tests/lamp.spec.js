@@ -88,6 +88,8 @@ const MONTH = {
 
 const bridge = (config, day, connectError) => `
   window.__calls = [];
+  window.__emit = (name, payload) =>
+    ((window.__listeners || {})[name] || []).forEach((h) => h({ payload }));
   window.__month = ${JSON.stringify(MONTH)};
   window.__baseLedger = ${JSON.stringify((day.ledgers || [])[0] || null)};
   window.__TAURI__ = {
@@ -120,7 +122,16 @@ const bridge = (config, day, connectError) => `
         return null;
       },
     },
-    event: { listen: async () => () => {} },
+    // Real listeners, so a test can deliver an event the way Rust does. The
+    // capture indicator is driven entirely by one, and a stub that swallowed
+    // it would let the dot be tested only in the state it starts in.
+    event: {
+      listen: async (name, handler) => {
+        (window.__listeners = window.__listeners || {})[name] =
+          (window.__listeners[name] || []).concat(handler);
+        return () => {};
+      },
+    },
   };
 `;
 
@@ -937,9 +948,13 @@ test('a day that is done rests, and stops resting when you open it', async ({ pa
   await settle(page);
 
   await expect(page.locator('#stack')).toHaveClass(/lit-off/);
+
+  // A finished day is said in colour, not in opacity. Fading the card made the
+  // widget read as half-there rather than as done, which is the look a
+  // disabled control has, parked permanently in the corner of a screen.
   const shut = await page.evaluate(() =>
     getComputedStyle(document.getElementById('card')).opacity);
-  expect(Number(shut), 'a finished day steps back').toBeLessThan(1);
+  expect(Number(shut), 'a finished day is not dimmed').toBe(1);
 
   await open(page);
   const openOpacity = await page.evaluate(() => ({
@@ -1232,4 +1247,71 @@ test('the detail card fits the room there is, and never asks for more', async ({
   expect(box.bottom, 'above its own block').toBeLessThanOrEqual(box.segTop + 1);
   expect(box.top).toBeGreaterThanOrEqual(0);
   expect(await asks(), 'open, it costs no resize either').toBe(opened);
+});
+
+test('the detail card leaves when the pointer crosses onto bare track', async ({ page }) => {
+  // The strip is wider than what it holds. The frame is the context's window,
+  // so the run-up before the day started and the tail past the last block are
+  // bare track, and crossing onto that fires mouseover with no segment under
+  // the pointer while never firing mouseleave at all. The card used to stay
+  // up describing a block the pointer had already left.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await page.waitForTimeout(300);
+
+  const shown = () => page.evaluate(() => {
+    const pop = document.getElementById('pop');
+    return !pop.hidden && getComputedStyle(pop).visibility !== 'hidden';
+  });
+  const lit = () => page.locator('.lit').count();
+
+  const seg = await page.locator('#track .seg[data-kind]').first().boundingBox();
+  await page.mouse.move(seg.x + seg.width / 2, seg.y + seg.height / 2);
+  await page.waitForTimeout(250);
+  expect(await shown(), 'a block under the pointer says what it is').toBe(true);
+  expect(await lit(), 'and lights itself and its row').toBeGreaterThan(0);
+
+  // This day holds nothing between 16:25 and the 17:30 close, so the far right
+  // of the frame is track and nothing else.
+  const strip = await page.locator('#track').boundingBox();
+  await page.mouse.move(strip.x + strip.width - 2, strip.y + strip.height / 2);
+  await page.waitForTimeout(300);
+  expect(await shown(), 'bare track describes nothing, so nothing is described').toBe(false);
+  expect(await lit(), 'and nothing is left lit behind it').toBe(0);
+});
+
+test('the capture dot is shown only while frames are actually being written', async ({ page }) => {
+  // Capture that leaves no mark on screen is capture nobody consented to
+  // twice. The dot is driven by the recorder's own event rather than by what
+  // the page believes should be happening, so it cannot say "recording" while
+  // a pause or a closed window means nothing is written.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  await expect(page.locator('#rec')).toBeHidden();
+
+  await page.evaluate(() => window.__emit('capture', { recording: true }));
+  await expect(page.locator('#rec')).toBeVisible();
+
+  await page.evaluate(() => window.__emit('capture', { recording: false }));
+  await expect(page.locator('#rec')).toBeHidden();
+});
+
+test('the page hands Kaizen the capture answer rather than deciding it here', async ({ page }) => {
+  // What counts as a working day lives in the ledger. A second copy of that
+  // rule in the widget would be free to drift from the first, so the page
+  // forwards the answer and Rust treats a stale one as no.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER({ capture: true })] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  const sent = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'set_lamp').map(([, a]) => a));
+
+  expect(sent.length, 'the lamp state was pushed').toBeGreaterThan(0);
+  expect(sent[sent.length - 1].capture, 'with the window answer alongside it').toBe(true);
 });

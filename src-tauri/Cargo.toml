@@ -28,6 +28,13 @@ tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# Compositing and JPEG only: no decoders for formats nothing here ever reads.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# Already in the tree via tauri, so taking it directly costs no extra build.
+# Needed for one thing only: the operator's LOCAL wall clock, which is what the
+# archive is named and bucketed by.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 getrandom = "0.3"
 # Already in the tree via tauri, so taking it directly costs no extra build.
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
@@ -46,7 +53,19 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "blo
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+    # Capture: the foreground process behind a window title, whether the
+    # workstation is locked, and how much room is left before this stops.
+    "Win32_System_ProcessStatus",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
 ] }
+
+# Screen capture. Windows-only on purpose: pulled in unconditionally it would
+# drag X11 and wayland development headers into the Linux check container for
+# code that can never run there.
+xcap = "0.0.14"
 
 # The Credential Manager, which is DPAPI underneath. A token here lives a year,
 # and %APPDATA% is backed up, synced and folder-redirected, so a plaintext copy

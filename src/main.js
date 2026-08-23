@@ -50,6 +50,7 @@ const monthSummary = document.getElementById('monthSummary');
 const banner = document.getElementById('banner');
 const bannerText = document.getElementById('bannerText');
 const pop = document.getElementById('pop');
+const rec = document.getElementById('rec');
 const popTitle = document.getElementById('popTitle');
 const popSpan = document.getElementById('popSpan');
 const popBody = document.getElementById('popBody');
@@ -358,6 +359,15 @@ function render(l) {
   // there, so it carries the number.
   const [amount, what] = [delta.textContent, deltaLabel.textContent];
   invoke('set_tooltip', { text: `Kaizen · ${amount} ${what} · ${l.context}` }).catch(() => {});
+
+  // The tray's Hide item follows the same rule the lamp does: amber is a nudge
+  // and may be put away, red insists. Pushed from here because this is the
+  // thing that just read the day; Rust asking again would be a second answer.
+  // capture is Kaizen's answer to whether this minute is inside a context that
+  // earns recording. Rust deliberately does not work it out for itself: the
+  // rule lives in the ledger, and a second copy here would be free to drift
+  // from it. Rust treats a stale answer as no.
+  invoke('set_lamp', { state: l.state ?? '', capture: l.capture ?? null }).catch(() => {});
 
   // A day that never started can hold nothing, so that is the only thing
   // worth offering until it has.
@@ -952,9 +962,32 @@ function unlight() {
   }
 }
 
+let dropping = null;
+
+/**
+ * Leaving a block and leaving the strip are not the same event.
+ *
+ * The strip is wider than what it holds: the frame runs the whole window, so
+ * the run-up before the day was started and the tail past the ceiling are bare
+ * track. Crossing onto that fires mouseover with no segment under the pointer,
+ * and mouseleave does not fire at all, so without this the popover for the
+ * block just left stayed up over empty ground.
+ *
+ * Both routes share one short grace, which is what keeps the seam between two
+ * touching blocks from blinking: the next block's mouseover cancels the drop
+ * before it runs.
+ */
+function drop() {
+  clearTimeout(dropping);
+  dropping = setTimeout(() => {
+    unlight();
+    closePop();
+  }, 120);
+}
+
 track.addEventListener('mouseover', (event) => {
   const seg = event.target.closest('.seg[data-kind]');
-  if (!seg) return;
+  if (!seg) return drop();
 
   clearTimeout(dropping);
   unlight();
@@ -962,15 +995,7 @@ track.addEventListener('mouseover', (event) => {
   showPop(seg, seg.dataset.kind, Number(seg.dataset.index));
 });
 
-let dropping = null;
-
-track.addEventListener('mouseleave', () => {
-  clearTimeout(dropping);
-  dropping = setTimeout(() => {
-    unlight();
-    closePop();
-  }, 120);
-});
+track.addEventListener('mouseleave', drop);
 
 // Open, the strip is the same control as the rows above it: a block opens what
 // it describes. Closed, there is nothing above it to open, so it falls through
@@ -989,7 +1014,7 @@ track.addEventListener('click', (event) => {
 
 entriesEl.addEventListener('mouseover', (event) => {
   const row = event.target.closest('.erow[data-kind]');
-  if (!row) return;
+  if (!row) return unlight();
 
   unlight();
   twinned(row.dataset.kind, row.dataset.index, true);
@@ -1515,3 +1540,21 @@ document.getElementById('backToToday').addEventListener('click', (event) => {
 
 banner.addEventListener('click', (event) => event.stopPropagation());
 history.addEventListener('click', (event) => event.stopPropagation());
+
+// ── The capture indicator ───────────────────────────────────────────────
+//
+// Driven by an event from the recorder rather than by polling, so the dot
+// reflects what is actually being written rather than what the page believes
+// should be. Asked once at startup too, since the event only fires on change
+// and the app may launch mid-window with capture already running.
+
+function showRecording(on) {
+  if (rec) rec.hidden = !on;
+}
+
+listen('capture', (event) => showRecording(Boolean(event?.payload?.recording)))
+  .catch(() => {});
+
+invoke('capture_status')
+  .then((status) => showRecording(Boolean(status?.recording)))
+  .catch(() => {});

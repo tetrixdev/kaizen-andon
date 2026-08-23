@@ -123,6 +123,56 @@ pub fn set_bounds(
     }
 }
 
+/// Put the lamp back at the front of the topmost band.
+///
+/// `alwaysOnTop` is not a rank, it is a BAND. Every window that asks for it
+/// lands in the same one, and inside that band the most recently activated
+/// window sits on top, so Claude's desktop app covering the lamp is not it
+/// outranking us: it is two topmost windows and the other one was clicked
+/// last. Windows offers nothing above topmost that an ordinary app may use.
+///
+/// Re-asserting HWND_TOPMOST moves us back to the front of the band. It is the
+/// only lever there is, and it is a nudge rather than a guarantee: an app that
+/// re-asserts on the same schedule would trade places with us forever. In
+/// practice nothing does this at a two second cadence, and the cost is one
+/// syscall.
+///
+/// SWP_NOACTIVATE is what keeps it ambient. Without it this would steal focus
+/// twice a minute from whatever is being typed into, which is far worse than
+/// being covered.
+#[cfg(windows)]
+pub fn raise(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
+    };
+
+    // Hidden covers snoozed, and a window put down on purpose must not climb
+    // back over anything.
+    if !window.is_visible().unwrap_or(false) {
+        return Ok(());
+    }
+
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?;
+
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        )
+        .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(not(windows))]
+pub fn raise(_window: &tauri::WebviewWindow) -> Result<(), String> {
+    Ok(())
+}
+
 /// Everywhere else, two calls and the jump that comes with them. Only Windows
 /// ships, so this exists to keep the crate building on CI's other targets.
 #[cfg(not(windows))]

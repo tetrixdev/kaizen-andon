@@ -6,6 +6,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod capture;
 pub mod deeplink;
 pub mod ledger;
 pub mod placement;
@@ -42,6 +43,73 @@ const COMPACT: (i32, i32) = (292, 88);
 const MIN_HEIGHT: i32 = 56;
 
 const TRAY_ID: &str = "kaizen";
+
+/// What the tray knows about the lamp between polls.
+///
+/// The state lives in the frontend, which is the thing actually reading the
+/// day; the tray is a second surface onto it. Rather than have Rust fetch the
+/// day again on its own schedule (a second answer, free to drift), the page
+/// pushes what it just drew, exactly as it already does for the tooltip.
+#[derive(Default)]
+struct Lamp {
+    state: std::sync::Mutex<String>,
+    hide: std::sync::Mutex<Option<tauri::menu::MenuItem<tauri::Wry>>>,
+
+    /// Kaizen's answer to "is this minute inside a context that earns
+    /// capture", and WHEN it said so.
+    ///
+    /// The rule for what a working day is lives in `App\Support\Ledger` and
+    /// must not be reimplemented here, so the page pushes the answer with each
+    /// poll. The timestamp is the important half: polling slows to five
+    /// minutes while the lamp is quiet, so an answer can be stale, and a stale
+    /// yes would keep recording past the end of the window. Staleness
+    /// therefore reads as NO. Erring toward not capturing costs evidence;
+    /// erring the other way records someone's evening.
+    capture_window: std::sync::Mutex<Option<(bool, std::time::Instant)>>,
+
+    /// The two capture items, so their labels can follow the actual state
+    /// rather than whatever they said when the tray was built.
+    #[allow(clippy::type_complexity)]
+    capture_menu: std::sync::Mutex<
+        Option<(
+            tauri::menu::MenuItem<tauri::Wry>,
+            tauri::menu::MenuItem<tauri::Wry>,
+        )>,
+    >,
+}
+
+/// Make the tray say what is actually happening.
+///
+/// A toggle whose label lies about its own state is worse than no toggle: the
+/// one thing it has to get right is whether the screen is being recorded.
+fn refresh_capture_menu(app: &AppHandle) {
+    let Ok(config) = state::Config::load(app) else {
+        return;
+    };
+
+    if let Ok(items) = app.state::<Lamp>().capture_menu.lock() {
+        if let Some((toggle, pause)) = items.as_ref() {
+            let _ = toggle.set_text(if config.capture_enabled {
+                "Stop capturing"
+            } else {
+                "Start capturing"
+            });
+            let _ = pause.set_text(if paused_now(&config) {
+                "Resume capture"
+            } else {
+                "Pause capture for an hour"
+            });
+            let _ = pause.set_enabled(config.capture_enabled);
+        }
+    }
+}
+
+/// How old Kaizen's answer may be before it stops counting as an answer.
+///
+/// Comfortably longer than the five-minute quiet poll, so an ordinary slow
+/// cycle does not stutter capture, and short enough that a page which has
+/// stopped polling entirely stops capture within a couple of minutes.
+const WINDOW_ANSWER_TTL: std::time::Duration = std::time::Duration::from_secs(6 * 60);
 
 /// Put the window where it belongs and size it to what the page says it is.
 ///
@@ -357,6 +425,86 @@ fn end_day(
 
 /// What the tray icon says on hover. The card may be hidden or snoozed; the
 /// tray is the one surface that is always there, so it carries the number.
+/// What the lamp is showing right now, pushed from the page.
+///
+/// Hiding is allowed from every state EXCEPT call: amber is a nudge and may be
+/// put away, red is the one that insists. The menu item is disabled rather
+/// than merely refusing, so the rule is visible before it is discovered.
+#[tauri::command]
+fn set_lamp(app: AppHandle, state: String, capture: Option<bool>) -> Result<(), String> {
+    let lamp = app.state::<Lamp>();
+
+    if let Ok(item) = lamp.hide.lock() {
+        if let Some(item) = item.as_ref() {
+            let _ = item.set_enabled(state != "call");
+        }
+    }
+    if let Ok(mut held) = lamp.state.lock() {
+        *held = state;
+    }
+    if let Ok(mut window) = lamp.capture_window.lock() {
+        *window = capture.map(|inside| (inside, std::time::Instant::now()));
+    }
+    Ok(())
+}
+
+/// What capture is doing, for the widget's indicator and the tray.
+#[tauri::command]
+fn capture_status(app: AppHandle) -> Result<serde_json::Value, String> {
+    let config = state::Config::load(&app).map_err(|e| e.to_string())?;
+    let paused = paused_now(&config);
+
+    Ok(json!({
+        "enabled": config.capture_enabled,
+        "paused": paused,
+        "recording": config.capture_enabled && !paused && in_window(&app),
+        "excluded": config.capture_excluded,
+    }))
+}
+
+/// Turn capture on or off, and say so on disk immediately.
+#[tauri::command]
+fn set_capture(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut config = state::Config::load(&app).map_err(|e| e.to_string())?;
+    config.capture_enabled = enabled;
+
+    // Turning it on clears any pause. Leaving a forgotten pause behind an
+    // enabled switch is the one state where the indicator would say recording
+    // while nothing was recorded.
+    if enabled {
+        config.capture_paused_until = None;
+    }
+
+    config.save(&app).map_err(|e| e.to_string())
+}
+
+/// Stop for a while, for a screenshare or anything else not ours to keep.
+#[tauri::command]
+fn pause_capture(app: AppHandle, minutes: Option<i64>) -> Result<(), String> {
+    let mut config = state::Config::load(&app).map_err(|e| e.to_string())?;
+    let until = chrono::Local::now() + chrono::Duration::minutes(minutes.unwrap_or(60));
+    config.capture_paused_until = Some(until.to_rfc3339());
+    config.save(&app).map_err(|e| e.to_string())
+}
+
+fn paused_now(config: &state::Config) -> bool {
+    config
+        .capture_paused_until
+        .as_deref()
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .is_some_and(|at| at > chrono::Local::now())
+}
+
+/// Whether Kaizen's last answer still counts, and was yes.
+fn in_window(app: &AppHandle) -> bool {
+    app.state::<Lamp>()
+        .capture_window
+        .lock()
+        .ok()
+        .and_then(|held| *held)
+        .is_some_and(|(inside, at)| inside && at.elapsed() < WINDOW_ANSWER_TTL)
+}
+
 #[tauri::command]
 fn set_tooltip(app: AppHandle, text: String) -> Result<(), String> {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
@@ -433,9 +581,69 @@ async fn install_any_update(app: tauri::AppHandle) -> tauri_plugin_updater::Resu
     app.restart()
 }
 
+/// The minute loop that records, and the three questions it asks first.
+///
+/// Every tick re-reads the config rather than caching it, because the switch
+/// and the pause are changed from the tray while this runs and a cached copy
+/// would keep recording after being told to stop. It is one small file read a
+/// minute against the alternative of ignoring an instruction to stop, which is
+/// not a trade worth making.
+///
+/// Errors are swallowed on purpose. A monitor that will not capture, a disk
+/// that will not take the frame, a locked screen: none of them are worth
+/// killing the widget over, and the tray already reports what capture is doing.
+fn start_capture(app: AppHandle) {
+    std::thread::spawn(move || {
+        let root = match app.path().app_data_dir() {
+            Ok(dir) => dir.join("capture"),
+            Err(_) => return,
+        };
+
+        let source = match capture::Screens::new() {
+            Ok(source) => source,
+            Err(_) => return,
+        };
+
+        // A gigabyte, well above one bucket, so capture stops with room to
+        // spare rather than at the point the disk is already unusable. Nothing
+        // is ever deleted to make room; refusing to be the process that fills
+        // a disk is a different promise from pruning, and only the first is
+        // made here.
+        let mut recorder = capture::Recorder::new(source, root, 1_024 * 1_024 * 1_024, Vec::new());
+        let mut was_recording = false;
+
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+
+            let Ok(config) = state::Config::load(&app) else {
+                continue;
+            };
+
+            let recording = config.capture_enabled && !paused_now(&config) && in_window(&app);
+
+            recorder.set_excluded(config.capture_excluded.clone());
+
+            let now = chrono::Local::now();
+            let stamp = (
+                now.format("%Y-%m-%d").to_string(),
+                now.format("%H%M").to_string(),
+            );
+            let _ = recorder.tick((&stamp.0, &stamp.1), recording);
+
+            // Tell the page only when it changes, so the indicator can appear
+            // and disappear without the widget polling for it.
+            if recording != was_recording {
+                was_recording = recording;
+                let _ = app.emit("capture", json!({ "recording": recording }));
+            }
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(Lamp::default())
         // Single instance first, and it matters: a deep link launches the exe
         // again, so without this a second copy would sit holding the URL while
         // the first shows an unconnected card.
@@ -466,6 +674,10 @@ pub fn run() {
             start_day,
             end_day,
             set_tooltip,
+            set_lamp,
+            capture_status,
+            set_capture,
+            pause_capture,
             snooze,
             wake
         ])
@@ -482,7 +694,45 @@ pub fn run() {
 
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            // Starts disabled: until the page has drawn a day there is no
+            // reading, and defaulting to "hideable" would let a red lamp be put
+            // away in the second before the first poll lands.
+            let hide = MenuItem::with_id(app, "hide", "Hide", false, None::<&str>)?;
+
+            // Capture is operated from here rather than only from the widget,
+            // because the moment it most needs stopping is a screenshare, and
+            // that is exactly when the widget is either hidden or the last
+            // thing anyone wants to go clicking around in on a shared screen.
+            let capturing = state::Config::load(app.handle())
+                .map(|c| c.capture_enabled)
+                .unwrap_or(false);
+            let toggle = MenuItem::with_id(
+                app,
+                "capture",
+                if capturing {
+                    "Stop capturing"
+                } else {
+                    "Start capturing"
+                },
+                true,
+                None::<&str>,
+            )?;
+            let pause = MenuItem::with_id(
+                app,
+                "pause-capture",
+                "Pause capture for an hour",
+                capturing,
+                None::<&str>,
+            )?;
+            let menu = Menu::with_items(app, &[&show, &hide, &toggle, &pause, &quit])?;
+
+            if let Ok(mut slot) = app.state::<Lamp>().capture_menu.lock() {
+                *slot = Some((toggle.clone(), pause.clone()));
+            }
+
+            if let Ok(mut slot) = app.state::<Lamp>().hide.lock() {
+                *slot = Some(hide.clone());
+            }
 
             TrayIconBuilder::with_id(TRAY_ID)
                 .icon(app.default_window_icon().unwrap().clone())
@@ -498,12 +748,56 @@ pub fn run() {
                             let _ = window.set_focus();
                         }
                     }
+                    "capture" => {
+                        let on = state::Config::load(app)
+                            .map(|c| c.capture_enabled)
+                            .unwrap_or(false);
+                        let _ = set_capture(app.clone(), !on);
+                        refresh_capture_menu(app);
+                    }
+                    "pause-capture" => {
+                        let _ = pause_capture(app.clone(), Some(60));
+                        refresh_capture_menu(app);
+                    }
+                    "hide" => {
+                        // Checked again here rather than trusted from the
+                        // disabled flag: the state can turn red between the
+                        // menu opening and the click landing on it.
+                        let red = app
+                            .state::<Lamp>()
+                            .state
+                            .lock()
+                            .map(|s| *s == "call")
+                            .unwrap_or(true);
+
+                        if !red {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.hide();
+                            }
+                        }
+                    }
                     _ => {}
                 })
                 .build(app)?;
 
             if let Some(window) = app.get_webview_window("main") {
-                let _ = place_window(window, false, None);
+                let _ = place_window(window.clone(), false, None);
+
+                // Hold the front of the topmost band. Another always-on-top
+                // app (Claude's desktop app is one) lands in the same band and
+                // sits above us the moment it is activated, so being topmost
+                // once at startup is not enough to stay visible.
+                //
+                // Two seconds is a deliberate floor: fast enough that being
+                // covered reads as a flicker rather than a state, slow enough
+                // that it is one syscall a couple of times a minute. A window
+                // that is hidden or snoozed is skipped inside `raise`.
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    let _ = placement::raise(&window);
+                });
+
+                start_capture(app.handle().clone());
             }
 
             // A cold start from a deep link: the URL is in our own arguments.

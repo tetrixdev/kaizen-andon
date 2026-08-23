@@ -51,6 +51,30 @@ pub struct Config {
     /// read and a secret in it would be a secret in name only.
     #[serde(default)]
     pub client_id: Option<String>,
+
+    /// Whether local activity capture is switched on at all.
+    ///
+    /// Off until asked for, and deliberately not defaulted to on by an update:
+    /// a build that quietly starts recording someone's screen because they
+    /// installed a patch is the single worst thing this feature could do.
+    #[serde(default)]
+    pub capture_enabled: bool,
+
+    /// Paused until this RFC3339 instant, for the screenshare case.
+    ///
+    /// A pause, not a stop: it lapses on its own, because the failure everyone
+    /// has with a manual mute is forgetting to undo it, and here forgetting
+    /// means silently keeping no evidence of an afternoon.
+    #[serde(default)]
+    pub capture_paused_until: Option<String>,
+
+    /// Executables whose windows are blacked out wherever they are on screen.
+    ///
+    /// Matched on the process name, lowercased. A password manager open on the
+    /// second monitor while the browser has focus is the case this exists for,
+    /// which is why it is not a foreground test.
+    #[serde(default)]
+    pub capture_excluded: Vec<String>,
 }
 
 impl Config {
