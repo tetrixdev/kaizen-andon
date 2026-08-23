@@ -65,7 +65,7 @@ struct Lamp {
     /// yes would keep recording past the end of the window. Staleness
     /// therefore reads as NO. Erring toward not capturing costs evidence;
     /// erring the other way records someone's evening.
-    capture_window: std::sync::Mutex<Option<(bool, std::time::Instant)>>,
+    capture_window: std::sync::Mutex<Option<(CaptureKinds, std::time::Instant)>>,
 
     /// The two capture items, so their labels can follow the actual state
     /// rather than whatever they said when the tray was built.
@@ -110,6 +110,25 @@ fn refresh_capture_menu(app: &AppHandle) {
 /// cycle does not stutter capture, and short enough that a page which has
 /// stopped polling entirely stops capture within a couple of minutes.
 const WINDOW_ANSWER_TTL: std::time::Duration = std::time::Duration::from_secs(6 * 60);
+
+/// What a context has asked to have recorded, as Kaizen reports it.
+///
+/// Two switches rather than one because they are different bargains: a title is
+/// a line naming a program and a window, a screenshot is a picture of everything
+/// that was on the screen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Deserialize)]
+struct CaptureKinds {
+    #[serde(default)]
+    activity: bool,
+    #[serde(default)]
+    screen: bool,
+}
+
+impl CaptureKinds {
+    fn any(&self) -> bool {
+        self.activity || self.screen
+    }
+}
 
 /// Put the window where it belongs and size it to what the page says it is.
 ///
@@ -431,7 +450,7 @@ fn end_day(
 /// put away, red is the one that insists. The menu item is disabled rather
 /// than merely refusing, so the rule is visible before it is discovered.
 #[tauri::command]
-fn set_lamp(app: AppHandle, state: String, capture: Option<bool>) -> Result<(), String> {
+fn set_lamp(app: AppHandle, state: String, capture: Option<CaptureKinds>) -> Result<(), String> {
     let lamp = app.state::<Lamp>();
 
     if let Ok(item) = lamp.hide.lock() {
@@ -443,7 +462,7 @@ fn set_lamp(app: AppHandle, state: String, capture: Option<bool>) -> Result<(), 
         *held = state;
     }
     if let Ok(mut window) = lamp.capture_window.lock() {
-        *window = capture.map(|inside| (inside, std::time::Instant::now()));
+        *window = capture.map(|kinds| (kinds, std::time::Instant::now()));
     }
     Ok(())
 }
@@ -457,8 +476,13 @@ fn capture_status(app: AppHandle) -> Result<serde_json::Value, String> {
     Ok(json!({
         "enabled": config.capture_enabled,
         "paused": paused,
-        "recording": config.capture_enabled && !paused && in_window(&app),
-        "excluded": config.capture_excluded,
+        // The clock the pause runs to, so the widget can say "until 14:30"
+        // rather than leaving the operator to work out when it lapses.
+        "paused_until": paused
+            .then(|| config.capture_paused_until.as_deref().and_then(from_rfc3339_clock))
+            .flatten(),
+        "recording": config.capture_enabled && !paused && window_kinds(&app).any(),
+        "screen": config.capture_enabled && !paused && window_kinds(&app).screen,
     }))
 }
 
@@ -478,13 +502,78 @@ fn set_capture(app: AppHandle, enabled: bool) -> Result<(), String> {
     config.save(&app).map_err(|e| e.to_string())
 }
 
-/// Stop for a while, for a screenshare or anything else not ours to keep.
+/// Stop until a moment, for a screenshare or anything else not ours to keep.
+///
+/// `until` is a wall clock "HH:MM" in the operator's own day, because that is
+/// how the reason is actually shaped: the meeting ends at half past, not in
+/// fifty-one minutes. A time already past today is read as tomorrow, so
+/// pausing at 23:50 until 00:30 means what it looks like. `minutes` remains
+/// for the tray's one-click hour.
+///
+/// Always a pause, never a stop: it lapses on its own, because the failure
+/// everyone has with a manual mute is forgetting to undo it, and here
+/// forgetting means silently keeping no evidence of an afternoon.
 #[tauri::command]
-fn pause_capture(app: AppHandle, minutes: Option<i64>) -> Result<(), String> {
+fn pause_capture(
+    app: AppHandle,
+    minutes: Option<i64>,
+    until: Option<String>,
+) -> Result<(), String> {
+    let now = chrono::Local::now();
+
+    let at = match until.as_deref() {
+        Some(clock) => {
+            let (h, m) = clock.split_once(':').ok_or("a pause time is \"HH:MM\"")?;
+            let (h, m) = (
+                h.parse::<u32>().map_err(|_| "a pause time is \"HH:MM\"")?,
+                m.parse::<u32>().map_err(|_| "a pause time is \"HH:MM\"")?,
+            );
+
+            let today = now
+                .date_naive()
+                .and_hms_opt(h, m, 0)
+                .ok_or("no such time of day")?
+                .and_local_timezone(chrono::Local)
+                .single()
+                .ok_or("that clock time is ambiguous today")?;
+
+            // A time already gone means the next one, not a pause that expired
+            // before it began.
+            if today > now {
+                today
+            } else {
+                today + chrono::Duration::days(1)
+            }
+        }
+        None => now + chrono::Duration::minutes(minutes.unwrap_or(60)),
+    };
+
     let mut config = state::Config::load(&app).map_err(|e| e.to_string())?;
-    let until = chrono::Local::now() + chrono::Duration::minutes(minutes.unwrap_or(60));
-    config.capture_paused_until = Some(until.to_rfc3339());
+    config.capture_paused_until = Some(at.to_rfc3339());
     config.save(&app).map_err(|e| e.to_string())
+}
+
+/// End a pause early.
+#[tauri::command]
+fn resume_capture(app: AppHandle) -> Result<(), String> {
+    let mut config = state::Config::load(&app).map_err(|e| e.to_string())?;
+    config.capture_paused_until = None;
+    config.save(&app).map_err(|e| e.to_string())
+}
+
+/// The wall clock of a stored instant, for showing a pause's end.
+fn from_rfc3339_clock(at: &str) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(at)
+        .ok()
+        .map(|at| at.with_timezone(&chrono::Local).format("%H:%M").to_string())
+}
+
+/// Where this install keeps its capture archive.
+fn capture_root(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| capture::root_in(&dir))
 }
 
 fn paused_now(config: &state::Config) -> bool {
@@ -495,14 +584,21 @@ fn paused_now(config: &state::Config) -> bool {
         .is_some_and(|at| at > chrono::Local::now())
 }
 
-/// Whether Kaizen's last answer still counts, and was yes.
-fn in_window(app: &AppHandle) -> bool {
+/// What Kaizen last said may be recorded, if that answer still counts.
+///
+/// A stale answer is nothing at all rather than a stale yes: polling slows to
+/// five minutes when the lamp is quiet, and a stale yes would keep recording
+/// past the end of a window. Erring this way costs evidence; erring the other
+/// way records someone's evening.
+fn window_kinds(app: &AppHandle) -> CaptureKinds {
     app.state::<Lamp>()
         .capture_window
         .lock()
         .ok()
         .and_then(|held| *held)
-        .is_some_and(|(inside, at)| inside && at.elapsed() < WINDOW_ANSWER_TTL)
+        .filter(|(_, at)| at.elapsed() < WINDOW_ANSWER_TTL)
+        .map(|(kinds, _)| kinds)
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -554,11 +650,48 @@ fn wake(app: AppHandle) -> Result<(), String> {
 /// instructions verbatim.
 #[tauri::command(async)]
 fn fetch_prompt(app: AppHandle, date: Option<String>) -> Result<api::Prompt, String> {
-    send(&app, |client, server, token| {
+    let mut prompt: api::Prompt = send(&app, |client, server, token| {
         client
             .get(dated(server, "/prompt", &date))
             .bearer_auth(token)
-    })
+    })?;
+
+    // The activity lines are attached HERE rather than by Kaizen, because
+    // Kaizen has never seen them and must not: the archive is local, and the
+    // recorder uploads nothing. Handing them to an AI is the operator's own
+    // act, which is what pasting a prompt is.
+    //
+    // Screenshots are deliberately not attached. A title is a line naming a
+    // program and a window; a picture is everything that was on the screen,
+    // including whatever somebody else sent you.
+    let day = prompt.date.clone();
+
+    if let Some(activity) = capture_root(&app).and_then(|root| capture::activity_for(&root, &day)) {
+        prompt.prompt.push_str(
+            "\n\n## What this machine was doing\n\n\
+             One line per minute, local to this machine and never uploaded: time, seconds \
+             idle, whether the frame was kept, the program in front, and its window title. \
+             Use it to account for the gaps above, not as a record of hours in itself: it \
+             says what was on screen, not what the work was.\n\n```\n",
+        );
+        prompt.prompt.push_str(activity.trim());
+        prompt.prompt.push_str("\n```");
+    }
+
+    Ok(prompt)
+}
+
+/// Show the archive in Explorer.
+#[tauri::command]
+fn open_capture_folder(app: AppHandle) -> Result<(), String> {
+    let root = capture_root(&app).ok_or("no archive directory on this machine")?;
+
+    // Created on demand: before the first frame there is nothing to open, and
+    // opening nothing reads as the feature being broken.
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+
+    tauri_plugin_opener::open_path(root.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
 /// Fetch and install a newer build, if there is one.
@@ -594,9 +727,8 @@ async fn install_any_update(app: tauri::AppHandle) -> tauri_plugin_updater::Resu
 /// killing the widget over, and the tray already reports what capture is doing.
 fn start_capture(app: AppHandle) {
     std::thread::spawn(move || {
-        let root = match app.path().app_data_dir() {
-            Ok(dir) => dir.join("capture"),
-            Err(_) => return,
+        let Some(root) = capture_root(&app) else {
+            return;
         };
 
         let source = match capture::Screens::new() {
@@ -609,7 +741,7 @@ fn start_capture(app: AppHandle) {
         // is ever deleted to make room; refusing to be the process that fills
         // a disk is a different promise from pruning, and only the first is
         // made here.
-        let mut recorder = capture::Recorder::new(source, root, 1_024 * 1_024 * 1_024, Vec::new());
+        let mut recorder = capture::Recorder::new(source, root, 1_024 * 1_024 * 1_024);
         let mut was_recording = false;
 
         loop {
@@ -619,16 +751,19 @@ fn start_capture(app: AppHandle) {
                 continue;
             };
 
-            let recording = config.capture_enabled && !paused_now(&config) && in_window(&app);
-
-            recorder.set_excluded(config.capture_excluded.clone());
+            let allowed = if config.capture_enabled && !paused_now(&config) {
+                window_kinds(&app)
+            } else {
+                CaptureKinds::default()
+            };
+            let recording = allowed.any();
 
             let now = chrono::Local::now();
             let stamp = (
                 now.format("%Y-%m-%d").to_string(),
                 now.format("%H%M").to_string(),
             );
-            let _ = recorder.tick((&stamp.0, &stamp.1), recording);
+            let _ = recorder.tick((&stamp.0, &stamp.1), allowed.activity, allowed.screen);
 
             // Tell the page only when it changes, so the indicator can appear
             // and disappear without the widget polling for it.
@@ -678,6 +813,8 @@ pub fn run() {
             capture_status,
             set_capture,
             pause_capture,
+            resume_capture,
+            open_capture_folder,
             snooze,
             wake
         ])
@@ -724,7 +861,17 @@ pub fn run() {
                 capturing,
                 None::<&str>,
             )?;
-            let menu = Menu::with_items(app, &[&show, &hide, &toggle, &pause, &quit])?;
+            // Reachable even when capture is off: the archive outlives the
+            // switch, and looking at what was kept is not the same act as
+            // keeping more.
+            let folder = MenuItem::with_id(
+                app,
+                "capture-folder",
+                "Open capture folder",
+                true,
+                None::<&str>,
+            )?;
+            let menu = Menu::with_items(app, &[&show, &hide, &toggle, &pause, &folder, &quit])?;
 
             if let Ok(mut slot) = app.state::<Lamp>().capture_menu.lock() {
                 *slot = Some((toggle.clone(), pause.clone()));
@@ -756,8 +903,19 @@ pub fn run() {
                         refresh_capture_menu(app);
                     }
                     "pause-capture" => {
-                        let _ = pause_capture(app.clone(), Some(60));
+                        let paused = state::Config::load(app)
+                            .map(|c| paused_now(&c))
+                            .unwrap_or(false);
+
+                        let _ = if paused {
+                            resume_capture(app.clone())
+                        } else {
+                            pause_capture(app.clone(), Some(60), None)
+                        };
                         refresh_capture_menu(app);
+                    }
+                    "capture-folder" => {
+                        let _ = open_capture_folder(app.clone());
                     }
                     "hide" => {
                         // Checked again here rather than trusted from the

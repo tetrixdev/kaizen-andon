@@ -17,11 +17,10 @@ use windows::Win32::System::StationsAndDesktops::{
 };
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetForegroundWindow, GetLastInputInfo, GetWindowRect, GetWindowTextW,
-    GetWindowThreadProcessId, IsIconic, IsWindowVisible, LASTINPUTINFO,
+    GetForegroundWindow, GetLastInputInfo, GetWindowTextW, GetWindowThreadProcessId, LASTINPUTINFO,
 };
 
-use super::{Probe, Secret, Shot, Source};
+use super::{Probe, Shot, Source};
 
 pub struct Screens;
 
@@ -64,27 +63,6 @@ impl Source for Screens {
         Ok(shots)
     }
 
-    /// Every visible window owned by an excluded process, in desktop
-    /// coordinates. Minimised windows report a rectangle far off-screen, and
-    /// zero-size ones are tool windows; neither is on any monitor, so both drop
-    /// out when the rectangle is clipped to a screen.
-    fn secrets(&self, excluded: &[String]) -> Vec<Secret> {
-        if excluded.is_empty() {
-            return Vec::new();
-        }
-
-        let mut found: Vec<Secret> = Vec::new();
-        let lowered: Vec<String> = excluded.iter().map(|e| e.to_lowercase()).collect();
-
-        unsafe {
-            let _ = EnumWindows(
-                Some(collect),
-                LPARAM(&mut (&lowered, &mut found) as *mut _ as isize),
-            );
-        }
-        found
-    }
-
     fn free_bytes(&self, path: &Path) -> u64 {
         let mut wide: Vec<u16> = path.to_string_lossy().encode_utf16().collect();
         wide.push(0);
@@ -104,34 +82,6 @@ impl Source for Screens {
             }
         }
     }
-}
-
-/// One window, offered to `secrets` above.
-unsafe extern "system" fn collect(window: HWND, lparam: LPARAM) -> BOOL {
-    let payload = &mut *(lparam.0 as *mut (&Vec<String>, &mut Vec<Secret>));
-    let (excluded, found) = (payload.0, &mut *payload.1);
-
-    if !IsWindowVisible(window).as_bool() || IsIconic(window).as_bool() {
-        return BOOL(1);
-    }
-
-    let mut pid = 0u32;
-    GetWindowThreadProcessId(window, Some(&mut pid));
-    let name = process_name(pid).to_lowercase();
-    if name.is_empty() || !excluded.iter().any(|e| name == *e) {
-        return BOOL(1);
-    }
-
-    let mut rect = RECT::default();
-    if GetWindowRect(window, &mut rect).is_ok() {
-        found.push(Secret {
-            left: rect.left,
-            top: rect.top,
-            right: rect.right,
-            bottom: rect.bottom,
-        });
-    }
-    BOOL(1)
 }
 
 /// Milliseconds since the last keyboard or mouse input, machine-wide.

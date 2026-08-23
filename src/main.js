@@ -51,6 +51,8 @@ const banner = document.getElementById('banner');
 const bannerText = document.getElementById('bannerText');
 const pop = document.getElementById('pop');
 const rec = document.getElementById('rec');
+const recMenu = document.getElementById('recMenu');
+const recState = document.getElementById('recState');
 const popTitle = document.getElementById('popTitle');
 const popSpan = document.getElementById('popSpan');
 const popBody = document.getElementById('popBody');
@@ -1550,11 +1552,77 @@ history.addEventListener('click', (event) => event.stopPropagation());
 
 function showRecording(on) {
   if (rec) rec.hidden = !on;
+  if (!on) closeRecMenu();
 }
 
-listen('capture', (event) => showRecording(Boolean(event?.payload?.recording)))
-  .catch(() => {});
+function closeRecMenu() {
+  if (recMenu) recMenu.hidden = true;
+}
 
-invoke('capture_status')
-  .then((status) => showRecording(Boolean(status?.recording)))
-  .catch(() => {});
+/** Read the truth from the recorder, never from what the page last assumed. */
+async function refreshCapture() {
+  try {
+    const status = await invoke('capture_status');
+    showRecording(Boolean(status?.recording));
+
+    if (recState) {
+      recState.textContent = status?.paused
+        ? `Paused until ${status.paused_until ?? 'later'}`
+        : 'Capturing this screen';
+    }
+    return status;
+  } catch {
+    return null;
+  }
+}
+
+listen('capture', () => refreshCapture()).catch(() => {});
+refreshCapture();
+
+// The control lives on the dot: the thing that tells you it is recording is
+// the thing that stops it. The tray carries the same actions, because the
+// moment this most needs stopping is a screenshare, and that is exactly when
+// clicking around the widget on a shared screen is the last thing you want.
+rec?.addEventListener('click', async (event) => {
+  event.stopPropagation();
+  if (!recMenu) return;
+
+  const opening = recMenu.hidden;
+  await refreshCapture();
+  recMenu.hidden = !opening;
+});
+
+document.getElementById('recPauseHour')?.addEventListener('click', async (event) => {
+  event.stopPropagation();
+  await invoke('pause_capture', { minutes: 60 }).catch(() => {});
+  closeRecMenu();
+  refreshCapture();
+});
+
+document.getElementById('recUntil')?.addEventListener('change', async (event) => {
+  event.stopPropagation();
+  const until = event.target.value;
+  if (!until) return;
+
+  // A clock already gone today means the next one; Rust decides that, so the
+  // widget does not carry a second opinion about which day is meant.
+  await invoke('pause_capture', { until }).catch(() => {});
+  closeRecMenu();
+  refreshCapture();
+});
+
+document.getElementById('recStop')?.addEventListener('click', async (event) => {
+  event.stopPropagation();
+  await invoke('set_capture', { enabled: false }).catch(() => {});
+  closeRecMenu();
+  refreshCapture();
+});
+
+document.getElementById('recFolder')?.addEventListener('click', async (event) => {
+  event.stopPropagation();
+  await invoke('open_capture_folder').catch(() => {});
+  closeRecMenu();
+});
+
+recMenu?.addEventListener('click', (event) => event.stopPropagation());
+document.addEventListener('click', closeRecMenu);

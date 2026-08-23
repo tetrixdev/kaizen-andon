@@ -10,7 +10,7 @@ use std::io;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Which Kaizen this is pointed at. Never baked into the build: a generic
     /// binary is what lets one installer serve a dev instance, a production
@@ -54,10 +54,11 @@ pub struct Config {
 
     /// Whether local activity capture is switched on at all.
     ///
-    /// Off until asked for, and deliberately not defaulted to on by an update:
-    /// a build that quietly starts recording someone's screen because they
-    /// installed a patch is the single worst thing this feature could do.
-    #[serde(default)]
+    /// On by default. The archive never leaves the machine, the window rule
+    /// keeps it inside working hours, and an indicator says so whenever it
+    /// runs, so the default that serves the operator is the one that actually
+    /// has the evidence when a checkpoint asks for it.
+    #[serde(default = "on")]
     pub capture_enabled: bool,
 
     /// Paused until this RFC3339 instant, for the screenshare case.
@@ -67,14 +68,24 @@ pub struct Config {
     /// means silently keeping no evidence of an afternoon.
     #[serde(default)]
     pub capture_paused_until: Option<String>,
+}
 
-    /// Executables whose windows are blacked out wherever they are on screen.
-    ///
-    /// Matched on the process name, lowercased. A password manager open on the
-    /// second monitor while the browser has focus is the case this exists for,
-    /// which is why it is not a foreground test.
-    #[serde(default)]
-    pub capture_excluded: Vec<String>,
+fn on() -> bool {
+    true
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            server_url: None,
+            kaizen_day: None,
+            snoozed_at_state: None,
+            snoozed_on: None,
+            client_id: None,
+            capture_enabled: on(),
+            capture_paused_until: None,
+        }
+    }
 }
 
 impl Config {

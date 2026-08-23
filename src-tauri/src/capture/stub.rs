@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use super::{Probe, Secret, Shot, Source};
+use super::{Probe, Shot, Source};
 
 pub struct Screens;
 
@@ -36,10 +36,6 @@ impl Source for Screens {
             height: 2,
             rgba: vec![0; 4 * 2 * 4],
         }])
-    }
-
-    fn secrets(&self, _excluded: &[String]) -> Vec<Secret> {
-        Vec::new()
     }
 
     fn free_bytes(&self, _path: &Path) -> u64 {

@@ -51,6 +51,7 @@ const entry = (from, to, minutes, description, referenced) =>
      link: referenced ? 'https://external.example.com/app/entries/REF-1042' : null });
 
 const LEDGER = (over = {}) => ({
+  capture: { activity: true, screen: true },
   context: 'Work', date: '2026-08-19', state: 'attention', phase: 'accounting',
   window: '08:30 - 17:30', started_at: '08:34', logs_externally: true,
   target_minutes: 480, work_minutes: 331, gap_minutes: 95, unreferenced_minutes: 120,
@@ -112,6 +113,9 @@ const bridge = (config, day, connectError) => `
         if (cmd === 'start_day' && window.__refuseStart) throw new Error(window.__refuseStart);
         if (cmd === 'end_day' && window.__refuseEnd) throw new Error(window.__refuseEnd);
         if (cmd === 'fetch_month') return window.__month;
+        // The dot re-reads the recorder rather than trusting an event payload,
+        // so the stub has to answer like the recorder does.
+        if (cmd === 'capture_status') return window.__capture || { recording: false, paused: false };
         if (cmd === 'save_entries') {
           if (window.__refuse) throw new Error(window.__refuse);
           return window.__after || ${JSON.stringify(day)};
@@ -1293,11 +1297,69 @@ test('the capture dot is shown only while frames are actually being written', as
 
   await expect(page.locator('#rec')).toBeHidden();
 
-  await page.evaluate(() => window.__emit('capture', { recording: true }));
+  await page.evaluate(() => {
+    window.__capture = { recording: true, paused: false };
+    window.__emit('capture', { recording: true });
+  });
   await expect(page.locator('#rec')).toBeVisible();
 
-  await page.evaluate(() => window.__emit('capture', { recording: false }));
+  await page.evaluate(() => {
+    window.__capture = { recording: false, paused: false };
+    window.__emit('capture', { recording: false });
+  });
   await expect(page.locator('#rec')).toBeHidden();
+});
+
+test('the dot carries the controls, and says when a pause ends', async ({ page }) => {
+  // The control belongs where the fact is: the thing telling you it is
+  // recording is the thing that stops it.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  await page.evaluate(() => {
+    window.__capture = { recording: true, paused: false };
+    window.__emit('capture', { recording: true });
+  });
+  await expect(page.locator('#rec')).toBeVisible();
+  await expect(page.locator('#recMenu')).toBeHidden();
+
+  await page.locator('#rec').click();
+  await expect(page.locator('#recMenu')).toBeVisible();
+
+  // A pause is stated with its end, not as a bare "paused": knowing it lapses
+  // at 14:30 is the whole difference between a pause and a mystery.
+  await page.evaluate(() => {
+    window.__capture = { recording: false, paused: true, paused_until: '14:30' };
+  });
+  await page.locator('#recPauseHour').click();
+  await expect(page.locator('#recMenu')).toBeHidden();
+
+  const calls = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'pause_capture').map(([, a]) => a));
+  expect(calls.at(-1), 'the hour is passed as minutes').toEqual({ minutes: 60 });
+});
+
+test('pausing until a clock time hands the clock to Rust, not a computed instant', async ({ page }) => {
+  // Which day "00:30" means is decided in one place. The widget forwarding a
+  // bare clock is what keeps that from becoming two answers.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  await page.evaluate(() => {
+    window.__capture = { recording: true, paused: false };
+    window.__emit('capture', { recording: true });
+  });
+  await page.locator('#rec').click();
+  await page.locator('#recUntil').fill('14:30');
+  await page.locator('#recUntil').dispatchEvent('change');
+
+  const calls = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'pause_capture').map(([, a]) => a));
+  expect(calls.at(-1), 'the wall clock goes over as written').toEqual({ until: '14:30' });
 });
 
 test('the page hands Kaizen the capture answer rather than deciding it here', async ({ page }) => {
@@ -1305,7 +1367,7 @@ test('the page hands Kaizen the capture answer rather than deciding it here', as
   // rule in the widget would be free to drift from the first, so the page
   // forwards the answer and Rust treats a stale one as no.
   await page.setViewportSize({ width: 292, height: 88 });
-  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER({ capture: true })] }, null));
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER({ capture: { activity: true, screen: true } })] }, null));
   await page.goto(PAGE);
   await settle(page);
 
@@ -1313,5 +1375,27 @@ test('the page hands Kaizen the capture answer rather than deciding it here', as
     window.__calls.filter(([c]) => c === 'set_lamp').map(([, a]) => a));
 
   expect(sent.length, 'the lamp state was pushed').toBeGreaterThan(0);
-  expect(sent[sent.length - 1].capture, 'with the window answer alongside it').toBe(true);
+  expect(sent[sent.length - 1].capture, 'with the window answer alongside it')
+    .toEqual({ activity: true, screen: true });
+});
+
+test('the capture folder can be opened from the dot', async ({ page }) => {
+  // Reachable whether or not anything is recording: the archive outlives the
+  // switch, and looking at what was kept is not the same act as keeping more.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  await page.evaluate(() => {
+    window.__capture = { recording: true, paused: false };
+    window.__emit('capture', { recording: true });
+  });
+  await page.locator('#rec').click();
+  await page.locator('#recFolder').click();
+
+  const opened = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'open_capture_folder').length);
+  expect(opened, 'the folder was asked for').toBe(1);
+  await expect(page.locator('#recMenu')).toBeHidden();
 });

@@ -74,15 +74,6 @@ pub struct Shot {
     pub rgba: Vec<u8>,
 }
 
-/// A window worth hiding, in virtual-desktop coordinates.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Secret {
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-}
-
 /// What the machine was doing this minute, apart from what it looked like.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Probe {
@@ -96,12 +87,6 @@ pub struct Probe {
 pub trait Source {
     fn probe(&self) -> Result<Probe, String>;
     fn shots(&self) -> Result<Vec<Shot>, String>;
-    /// Every visible window belonging to an excluded process, wherever it is.
-    ///
-    /// Deliberately NOT "the foreground window, if excluded". A password
-    /// manager sitting open on the second screen while the browser has focus is
-    /// exactly the case that matters, and a foreground test misses all of it.
-    fn secrets(&self, excluded: &[String]) -> Vec<Secret>;
     /// Free bytes on the volume holding `path`.
     fn free_bytes(&self, path: &Path) -> u64;
 }
@@ -119,6 +104,8 @@ pub enum Tick {
     Unchanged,
     /// Locked workstation: the line is written, the picture is not.
     Away,
+    /// This context asked for titles only, so no picture was taken.
+    Titles,
 }
 
 /// A quarter hour of frames, held in memory until it is sealed into a zip.
@@ -133,18 +120,16 @@ pub struct Recorder<S: Source> {
     source: S,
     root: PathBuf,
     floor_bytes: u64,
-    excluded: Vec<String>,
     bucket: Option<Bucket>,
     last_hash: Option<[u8; 32]>,
 }
 
 impl<S: Source> Recorder<S> {
-    pub fn new(source: S, root: PathBuf, floor_bytes: u64, excluded: Vec<String>) -> Self {
+    pub fn new(source: S, root: PathBuf, floor_bytes: u64) -> Self {
         Self {
             source,
             root,
             floor_bytes,
-            excluded,
             bucket: None,
             last_hash: None,
         }
@@ -155,8 +140,13 @@ impl<S: Source> Recorder<S> {
     /// minute is inside a context that earns it, which is deliberately NOT
     /// recomputed here. The widget must not carry a second opinion about what a
     /// working day is.
-    pub fn tick(&mut self, stamp: (&str, &str), capturing: bool) -> Result<Tick, String> {
-        if !capturing {
+    pub fn tick(
+        &mut self,
+        stamp: (&str, &str),
+        activity: bool,
+        screen: bool,
+    ) -> Result<Tick, String> {
+        if !activity && !screen {
             self.seal()?;
             return Ok(Tick::Resting);
         }
@@ -176,14 +166,18 @@ impl<S: Source> Recorder<S> {
             return Ok(Tick::Away);
         }
 
-        let secrets = self.source.secrets(&self.excluded);
-        let frame = encode(self.source.shots()?, &secrets)?;
+        // A context may want the line without the picture, which is the whole
+        // point of the two switches being separate.
+        if !screen {
+            self.push(stamp, &probe, "titles", None)?;
+            return Ok(Tick::Titles);
+        }
+
+        let frame = encode(self.source.shots()?)?;
         let hash: [u8; 32] = Sha256::digest(&frame).into();
 
         // Reading one long document is thirty identical screenshots. Storing
-        // the first and pointing at it costs a line instead of a file. The hash
-        // is taken AFTER blanking, so two minutes differing only inside a
-        // hidden rectangle are correctly one frame.
+        // the first and pointing at it costs a line instead of a file.
         if self.last_hash == Some(hash) {
             self.push(stamp, &probe, "same", None)?;
             return Ok(Tick::Unchanged);
@@ -293,16 +287,32 @@ impl<S: Source> Recorder<S> {
         Ok(())
     }
 
-    /// Replace the exclusion list, which the tray can change while this runs.
-    pub fn set_excluded(&mut self, excluded: Vec<String>) {
-        self.excluded = excluded;
-    }
-
     /// Total bytes held under the archive root, for the tray to show. Nothing
     /// prunes; seeing it grow is the whole point.
     pub fn size_bytes(&self) -> u64 {
         walk(&self.root)
     }
+}
+
+/// Where the archive lives under an app data directory.
+pub fn root_in(app_data: &Path) -> PathBuf {
+    app_data.join("capture")
+}
+
+/// The day's activity lines, for handing to an AI at a checkpoint.
+///
+/// Read from the live TSV rather than the archives, so it works mid-quarter and
+/// needs nothing unzipped. This is the only route by which any of this leaves
+/// the machine, and it is the operator taking it: the recorder never uploads,
+/// and a prompt travels only when it is pasted somewhere.
+///
+/// Titles only. The pictures stay on disk, because a screenshot is a picture of
+/// everything that was on screen while a title is a line naming a program and a
+/// window, and handing over the second is not consent for the first.
+pub fn activity_for(root: &Path, day: &str) -> Option<String> {
+    let text = fs::read_to_string(root.join(day).join(format!("{day}.tsv"))).ok()?;
+
+    (!text.trim().is_empty()).then_some(text)
 }
 
 /// Floor a minute to its quarter: 0914 -> 0900, 0915 -> 0915.
@@ -323,13 +333,8 @@ fn zip_name(day: &str, start: &str) -> String {
 /// Every monitor laid out left to right in one image, scaled down and encoded.
 /// One file for the whole desk: two files for two screens means guessing later
 /// which one was which.
-///
-/// `secrets` are blanked BEFORE the image is scaled or encoded, so no buffer
-/// holding those pixels is ever written anywhere. Blanking rather than skipping
-/// the whole frame is the point: the rest of the minute is still evidence, and
-/// a black rectangle says honestly that something was hidden there.
-fn encode(shots: Vec<Shot>, secrets: &[Secret]) -> Result<Vec<u8>, String> {
-    let canvas = composite(shots, secrets)?;
+fn encode(shots: Vec<Shot>) -> Result<Vec<u8>, String> {
+    let canvas = composite(shots)?;
     let (width, height) = (canvas.width(), canvas.height());
 
     let scaled = if width > MAX_WIDTH {
@@ -350,10 +355,8 @@ fn encode(shots: Vec<Shot>, secrets: &[Secret]) -> Result<Vec<u8>, String> {
 
 /// The desk as one image, at full size, with every secret already blacked out.
 ///
-/// Split from `encode` so a test can look at the pixels: whether a rectangle
-/// landed on the right screen is not a question a JPEG can answer, and getting
-/// it wrong is worse than not blanking at all because it still looks blanked.
-fn composite(shots: Vec<Shot>, secrets: &[Secret]) -> Result<image::RgbaImage, String> {
+/// Split from `encode` so a test can look at the pixels rather than a JPEG.
+fn composite(shots: Vec<Shot>) -> Result<image::RgbaImage, String> {
     if shots.is_empty() {
         return Err("no monitors".into());
     }
@@ -370,24 +373,6 @@ fn composite(shots: Vec<Shot>, secrets: &[Secret]) -> Result<image::RgbaImage, S
         let tile = image::RgbaImage::from_raw(shot.width, shot.height, shot.rgba.clone())
             .ok_or("a monitor's pixels did not match its size")?;
         image::imageops::replace(&mut canvas, &tile, x as i64, 0);
-
-        // The composite is monitors packed left to right, which is NOT the
-        // desktop's own coordinate space: a screen at desktop x=-1920 sits at
-        // composite x=0. Every rectangle has to make that trip or the blanking
-        // lands on the wrong screen, which is worse than not blanking at all
-        // because it looks like it worked.
-        for secret in secrets {
-            let left = secret.left.max(shot.x) - shot.x + x as i32;
-            let top = secret.top.max(shot.y) - shot.y;
-            let right = secret.right.min(shot.x + shot.width as i32) - shot.x + x as i32;
-            let bottom = secret.bottom.min(shot.y + shot.height as i32) - shot.y;
-
-            for py in top.max(0)..bottom.min(height as i32) {
-                for px in left.max(0)..right.min((x + shot.width) as i32) {
-                    canvas.put_pixel(px as u32, py as u32, image::Rgba([0, 0, 0, 255]));
-                }
-            }
-        }
 
         x += shot.width;
     }
@@ -431,7 +416,6 @@ mod tests {
         probe: RefCell<Probe>,
         pixel: RefCell<u8>,
         free: RefCell<u64>,
-        secrets: RefCell<Vec<Secret>>,
     }
 
     impl Fake {
@@ -445,7 +429,6 @@ mod tests {
                 }),
                 pixel: RefCell::new(1),
                 free: RefCell::new(u64::MAX),
-                secrets: RefCell::new(Vec::new()),
             }
         }
     }
@@ -475,10 +458,6 @@ mod tests {
             ])
         }
 
-        fn secrets(&self, _excluded: &[String]) -> Vec<Secret> {
-            self.secrets.borrow().clone()
-        }
-
         fn free_bytes(&self, _path: &Path) -> u64 {
             *self.free.borrow()
         }
@@ -503,25 +482,22 @@ mod tests {
 
     #[test]
     fn monitors_are_laid_out_side_by_side_in_one_image() {
-        let wide = encode(
-            vec![
-                Shot {
-                    x: 0,
-                    y: 0,
-                    width: 8,
-                    height: 4,
-                    rgba: vec![9; 8 * 4 * 4],
-                },
-                Shot {
-                    x: 8,
-                    y: 0,
-                    width: 8,
-                    height: 4,
-                    rgba: vec![9; 8 * 4 * 4],
-                },
-            ],
-            &[],
-        )
+        let wide = encode(vec![
+            Shot {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 4,
+                rgba: vec![9; 8 * 4 * 4],
+            },
+            Shot {
+                x: 8,
+                y: 0,
+                width: 8,
+                height: 4,
+                rgba: vec![9; 8 * 4 * 4],
+            },
+        ])
         .unwrap();
 
         // A JPEG, and one image rather than two files to reconcile later.
@@ -531,46 +507,46 @@ mod tests {
 
     #[test]
     fn a_monitor_whose_pixels_do_not_match_its_size_is_refused() {
-        let err = encode(
-            vec![Shot {
-                x: 0,
-                y: 0,
-                width: 8,
-                height: 4,
-                rgba: vec![0; 3],
-            }],
-            &[],
-        )
+        let err = encode(vec![Shot {
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 4,
+            rgba: vec![0; 3],
+        }])
         .unwrap_err();
         assert!(err.contains("did not match"), "{err}");
     }
 
     #[test]
     fn an_unchanged_screen_costs_a_line_rather_than_a_file() {
-        let mut rec = Recorder::new(Fake::new(), scratch(), 0, vec![]);
+        let mut rec = Recorder::new(Fake::new(), scratch(), 0);
 
         assert!(matches!(
-            rec.tick(("2026-08-20", "0900"), true).unwrap(),
+            rec.tick(("2026-08-20", "0900"), true, true).unwrap(),
             Tick::Kept { .. }
         ));
         assert_eq!(
-            rec.tick(("2026-08-20", "0901"), true).unwrap(),
+            rec.tick(("2026-08-20", "0901"), true, true).unwrap(),
             Tick::Unchanged
         );
 
         *rec.source.pixel.borrow_mut() = 200; // the screen changed
         assert!(matches!(
-            rec.tick(("2026-08-20", "0902"), true).unwrap(),
+            rec.tick(("2026-08-20", "0902"), true, true).unwrap(),
             Tick::Kept { .. }
         ));
     }
 
     #[test]
     fn a_locked_workstation_is_recorded_but_not_pictured() {
-        let mut rec = Recorder::new(Fake::new(), scratch(), 0, vec![]);
+        let mut rec = Recorder::new(Fake::new(), scratch(), 0);
         rec.source.probe.borrow_mut().locked = true;
 
-        assert_eq!(rec.tick(("2026-08-20", "0900"), true).unwrap(), Tick::Away);
+        assert_eq!(
+            rec.tick(("2026-08-20", "0900"), true, true).unwrap(),
+            Tick::Away
+        );
         assert!(rec.bucket.as_ref().unwrap().frames.is_empty());
         assert_eq!(rec.bucket.as_ref().unwrap().lines.len(), 1);
     }
@@ -578,11 +554,11 @@ mod tests {
     #[test]
     fn resting_seals_what_is_open_rather_than_holding_it() {
         let root = scratch();
-        let mut rec = Recorder::new(Fake::new(), root.clone(), 0, vec![]);
+        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
 
-        rec.tick(("2026-08-20", "0900"), true).unwrap();
+        rec.tick(("2026-08-20", "0900"), true, true).unwrap();
         assert_eq!(
-            rec.tick(("2026-08-20", "0901"), false).unwrap(),
+            rec.tick(("2026-08-20", "0901"), false, false).unwrap(),
             Tick::Resting
         );
 
@@ -593,11 +569,11 @@ mod tests {
     #[test]
     fn the_floor_stops_capture_without_deleting_anything() {
         let root = scratch();
-        let mut rec = Recorder::new(Fake::new(), root.clone(), 1_000_000, vec![]);
-        rec.tick(("2026-08-20", "0900"), true).unwrap();
+        let mut rec = Recorder::new(Fake::new(), root.clone(), 1_000_000);
+        rec.tick(("2026-08-20", "0900"), true, true).unwrap();
 
         *rec.source.free.borrow_mut() = 5;
-        let tick = rec.tick(("2026-08-20", "0901"), true).unwrap();
+        let tick = rec.tick(("2026-08-20", "0901"), true, true).unwrap();
 
         assert!(matches!(tick, Tick::NoRoom { .. }), "{tick:?}");
         // What was already captured is sealed, not discarded.
@@ -607,11 +583,11 @@ mod tests {
     #[test]
     fn crossing_the_quarter_seals_the_one_behind_it() {
         let root = scratch();
-        let mut rec = Recorder::new(Fake::new(), root.clone(), 0, vec![]);
+        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
 
-        rec.tick(("2026-08-20", "0914"), true).unwrap();
+        rec.tick(("2026-08-20", "0914"), true, true).unwrap();
         *rec.source.pixel.borrow_mut() = 50;
-        rec.tick(("2026-08-20", "0915"), true).unwrap();
+        rec.tick(("2026-08-20", "0915"), true, true).unwrap();
 
         assert!(root.join("2026-08-20/2026-08-20_0900-0915.zip").exists());
         assert_eq!(rec.bucket.as_ref().unwrap().start, "0915");
@@ -620,11 +596,11 @@ mod tests {
     #[test]
     fn the_days_tsv_is_readable_without_opening_a_single_zip() {
         let root = scratch();
-        let mut rec = Recorder::new(Fake::new(), root.clone(), 0, vec![]);
+        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
 
         rec.source.probe.borrow_mut().title = "Ticket ZP0138157\twith a tab".into();
-        rec.tick(("2026-08-20", "0900"), true).unwrap();
-        rec.tick(("2026-08-20", "0901"), true).unwrap();
+        rec.tick(("2026-08-20", "0900"), true, true).unwrap();
+        rec.tick(("2026-08-20", "0901"), true, true).unwrap();
 
         let tsv = fs::read_to_string(root.join("2026-08-20/2026-08-20.tsv")).unwrap();
         let lines: Vec<_> = tsv.lines().collect();
@@ -643,11 +619,11 @@ mod tests {
     #[test]
     fn a_sealed_quarter_stands_on_its_own() {
         let root = scratch();
-        let mut rec = Recorder::new(Fake::new(), root.clone(), 0, vec![]);
+        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
 
-        rec.tick(("2026-08-20", "0900"), true).unwrap();
+        rec.tick(("2026-08-20", "0900"), true, true).unwrap();
         *rec.source.pixel.borrow_mut() = 77;
-        rec.tick(("2026-08-20", "0901"), true).unwrap();
+        rec.tick(("2026-08-20", "0901"), true, true).unwrap();
         rec.seal().unwrap();
 
         let path = root.join("2026-08-20/2026-08-20_0900-0915.zip");
@@ -664,154 +640,53 @@ mod tests {
         assert!(zip.by_name("titles.tsv").is_ok());
     }
 
-    /// Two 8x4 screens side by side, the second at desktop x=8.
-    fn desk(v: u8) -> Vec<Shot> {
-        vec![
-            Shot {
-                x: 0,
-                y: 0,
-                width: 8,
-                height: 4,
-                rgba: vec![v; 8 * 4 * 4],
-            },
-            Shot {
-                x: 8,
-                y: 0,
-                width: 8,
-                height: 4,
-                rgba: vec![v; 8 * 4 * 4],
-            },
-        ]
-    }
-
-    fn black_at(img: &image::RgbaImage, x: u32, y: u32) -> bool {
-        img.get_pixel(x, y).0 == [0, 0, 0, 255]
-    }
-
     #[test]
-    fn a_secret_on_the_second_screen_is_blanked_though_it_never_had_focus() {
-        // The case a foreground test cannot see: the password manager is open
-        // on the right-hand monitor while the browser has focus on the left.
-        let secret = Secret {
-            left: 10,
-            top: 1,
-            right: 14,
-            bottom: 3,
-        };
-        let img = composite(desk(200), &[secret]).unwrap();
+    fn titles_without_pictures_is_a_supported_arrangement() {
+        // A context may want to know which program was in front without a
+        // photograph of what was in it. That is the whole reason the two
+        // switches are separate rather than one.
+        let root = scratch();
+        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
 
-        assert!(black_at(&img, 10, 1), "the secret's own pixels survived");
-        assert!(black_at(&img, 13, 2), "and its far corner");
-        assert!(!black_at(&img, 9, 1), "the pixel left of it was eaten");
-        assert!(!black_at(&img, 14, 1), "the pixel right of it was eaten");
-        assert!(!black_at(&img, 2, 2), "the other screen was blanked too");
-    }
-
-    #[test]
-    fn a_screen_left_of_the_origin_still_blanks_the_right_pixels() {
-        // Windows puts a second monitor at a NEGATIVE x when it sits to the
-        // left of the primary. The composite packs left to right from zero, so
-        // the two spaces disagree, and a rectangle that skips the translation
-        // lands on the wrong screen while still looking blanked.
-        let shots = vec![
-            Shot {
-                x: -8,
-                y: 0,
-                width: 8,
-                height: 4,
-                rgba: vec![120; 8 * 4 * 4],
-            },
-            Shot {
-                x: 0,
-                y: 0,
-                width: 8,
-                height: 4,
-                rgba: vec![120; 8 * 4 * 4],
-            },
-        ];
-        // A window at desktop x=-6 is on the LEFT screen, composite x=2.
-        let img = composite(
-            shots,
-            &[Secret {
-                left: -6,
-                top: 0,
-                right: -4,
-                bottom: 2,
-            }],
-        )
-        .unwrap();
-
-        assert!(black_at(&img, 2, 0), "the left screen's rectangle");
-        assert!(black_at(&img, 3, 1), "and the rest of it");
-        assert!(!black_at(&img, 10, 0), "the right screen was hit instead");
-        assert!(!black_at(&img, 6, 0), "the rectangle slid along the screen");
-    }
-
-    #[test]
-    fn a_secret_spanning_both_screens_is_blanked_on_each() {
-        let img = composite(
-            desk(90),
-            &[Secret {
-                left: 6,
-                top: 0,
-                right: 10,
-                bottom: 4,
-            }],
-        )
-        .unwrap();
-
-        assert!(black_at(&img, 7, 2), "the half on the first screen");
-        assert!(black_at(&img, 9, 2), "the half on the second");
-        assert!(!black_at(&img, 5, 2), "it grew leftward");
-        assert!(!black_at(&img, 11, 2), "it grew rightward");
-    }
-
-    #[test]
-    fn a_rectangle_reaching_past_the_desk_is_clipped_rather_than_panicking() {
-        // A minimised window reports coordinates far off any screen, and a
-        // maximised one reports slightly past the edge. Neither may index out
-        // of the canvas.
-        let far = Secret {
-            left: -32000,
-            top: -32000,
-            right: -31000,
-            bottom: -31000,
-        };
-        let over = Secret {
-            left: 12,
-            top: 2,
-            right: 9999,
-            bottom: 9999,
-        };
-        let img = composite(desk(140), &[far, over]).unwrap();
-
-        assert!(black_at(&img, 15, 3), "the clipped rectangle still blanked");
-        assert!(
-            !black_at(&img, 0, 0),
-            "the off-screen one blanked something"
-        );
-    }
-
-    #[test]
-    fn the_hash_is_taken_after_blanking_so_a_hidden_change_is_not_a_new_frame() {
-        let mut rec = Recorder::new(Fake::new(), scratch(), 0, vec!["nordpass.exe".into()]);
-        *rec.source.secrets.borrow_mut() = vec![Secret {
-            left: 0,
-            top: 0,
-            right: 16,
-            bottom: 4,
-        }];
-
-        assert!(matches!(
-            rec.tick(("2026-08-21", "0900"), true).unwrap(),
-            Tick::Kept { .. }
-        ));
-
-        // The screen changed, but only underneath the blanked rectangle.
-        *rec.source.pixel.borrow_mut() = 250;
         assert_eq!(
-            rec.tick(("2026-08-21", "0901"), true).unwrap(),
-            Tick::Unchanged
+            rec.tick(("2026-08-23", "0900"), true, false).unwrap(),
+            Tick::Titles
         );
+
+        rec.seal().unwrap();
+        let tsv = fs::read_to_string(root.join("2026-08-23/2026-08-23.tsv")).unwrap();
+
+        assert!(tsv.contains("OUTLOOK.EXE"), "the line was written: {tsv}");
+        assert!(
+            tsv.contains("\ttitles\t"),
+            "and says why there is no frame: {tsv}"
+        );
+
+        let zip = zip::ZipArchive::new(
+            File::open(root.join("2026-08-23/2026-08-23_0900-0915.zip")).unwrap(),
+        )
+        .unwrap();
+        let names: Vec<String> = zip.file_names().map(String::from).collect();
+
+        assert!(names.contains(&"titles.tsv".to_string()), "{names:?}");
+        assert!(
+            !names.iter().any(|n| n.ends_with(".jpg")),
+            "a picture was taken anyway: {names:?}"
+        );
+    }
+
+    #[test]
+    fn the_days_activity_is_readable_without_a_recorder() {
+        // The prompt is assembled by a command, not by the capture thread, so
+        // reading the day cannot require holding the recorder.
+        let root = scratch();
+        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
+
+        assert!(activity_for(&root, "2026-08-23").is_none(), "nothing yet");
+
+        rec.tick(("2026-08-23", "0900"), true, true).unwrap();
+
+        let text = activity_for(&root, "2026-08-23").expect("the day reads back");
+        assert!(text.contains("OUTLOOK.EXE"), "{text}");
     }
 }
