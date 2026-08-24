@@ -231,10 +231,15 @@ body {
 .seg { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
 .seg.work { background: var(--ink); opacity: .82; }
 .seg.work.alt { opacity: .56; }
+/* A solid wash with a border, not the diagonal hatch this used to be. Work
+   is a solid fill with light text, gap is a solid wash with vivid text; rest
+   was the one segment drawn as a repeating stripe running straight through
+   its own fill, and any label sitting on top of it got sliced by the lines
+   letter by letter. Long entries ("Ziekenhuis - 20 weken echo") made that
+   impossible to read rather than merely inelegant. */
 .seg.rest {
-  background: repeating-linear-gradient(-45deg,
-    color-mix(in srgb, var(--indigo) 45%, transparent) 0 2px, transparent 2px 6px);
-  border: 1px solid color-mix(in srgb, var(--indigo) 30%, transparent);
+  background: color-mix(in srgb, var(--indigo) 16%, var(--paper-sunk));
+  border: 1px solid color-mix(in srgb, var(--indigo) 36%, transparent);
 }
 .seg.gap {
   background: color-mix(in srgb, var(--lamp) 10%, transparent);
@@ -704,7 +709,14 @@ body {
   overflow: hidden;
   pointer-events: none;
 }
-.seg.rest .seg-label { color: var(--ink-soft); }
+/* Mixed toward --ink rather than used bare: --indigo is one fixed value in
+   both themes, and on its own it is close to unreadable against the near-black
+   ground dark mode uses. Blending in --ink, which IS calibrated per theme,
+   keeps the indigo identity while guaranteeing contrast either way. */
+.seg.rest .seg-label {
+  color: color-mix(in srgb, var(--indigo) 55%, var(--ink));
+  font-weight: 500;
+}
 .seg.gap .seg-label { color: var(--lamp); }
 .phase-referencing .seg.work.unref .seg-label { color: var(--vermilion); }
 
