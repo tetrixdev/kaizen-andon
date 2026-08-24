@@ -111,24 +111,7 @@ fn refresh_capture_menu(app: &AppHandle) {
 /// stopped polling entirely stops capture within a couple of minutes.
 const WINDOW_ANSWER_TTL: std::time::Duration = std::time::Duration::from_secs(6 * 60);
 
-/// What a context has asked to have recorded, as Kaizen reports it.
-///
-/// Two switches rather than one because they are different bargains: a title is
-/// a line naming a program and a window, a screenshot is a picture of everything
-/// that was on the screen.
-#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Deserialize)]
-struct CaptureKinds {
-    #[serde(default)]
-    activity: bool,
-    #[serde(default)]
-    screen: bool,
-}
-
-impl CaptureKinds {
-    fn any(&self) -> bool {
-        self.activity || self.screen
-    }
-}
+use ledger::CaptureKinds;
 
 /// Put the window where it belongs and size it to what the page says it is.
 ///

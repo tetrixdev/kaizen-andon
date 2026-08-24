@@ -116,6 +116,30 @@ pub struct Gap {
     pub minutes: i64,
 }
 
+/// What a context has asked to have recorded, as Kaizen reports it.
+///
+/// Two switches rather than one because they are different bargains: a title
+/// is a line naming a program and a window, a screenshot is a picture of
+/// everything that was on the screen.
+///
+/// Lives beside `Ledger` rather than in `lib.rs`, which is where it was first
+/// written and where it silently drifted from the field below: the struct
+/// this decodes into and the type it decodes are easiest to keep in step when
+/// neither can be edited without seeing the other.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct CaptureKinds {
+    #[serde(default)]
+    pub activity: bool,
+    #[serde(default)]
+    pub screen: bool,
+}
+
+impl CaptureKinds {
+    pub fn any(&self) -> bool {
+        self.activity || self.screen
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ledger {
     pub context: String,
@@ -142,6 +166,12 @@ pub struct Ledger {
     pub unreferenced_minutes: i64,
     #[serde(default)]
     pub logs_externally: bool,
+    // THIS is the field that went missing the first time: Kaizen sends
+    // "capture" on every ledger, but nothing here read it, so serde quietly
+    // dropped it on the way in and the indicator (and the recorder itself)
+    // never saw a "yes" that had, in fact, already arrived.
+    #[serde(default)]
+    pub capture: CaptureKinds,
     pub phase: Phase,
     pub state: State,
     #[serde(default)]
