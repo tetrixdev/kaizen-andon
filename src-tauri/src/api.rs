@@ -153,7 +153,7 @@ pub fn url(server: &str, path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ledger::{Phase, State};
+    use crate::ledger::{CaptureKinds, Phase, State};
 
     #[test]
     fn paths_survive_a_trailing_slash() {
@@ -222,6 +222,7 @@ mod tests {
             gap_minutes: 0,
             unreferenced_minutes: 0,
             logs_externally: false,
+            capture: CaptureKinds::default(),
             phase: Phase::Accounting,
             state,
             gaps: vec![],

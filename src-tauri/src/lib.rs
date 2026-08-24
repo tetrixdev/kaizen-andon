@@ -719,6 +719,18 @@ fn start_capture(app: AppHandle) {
             Err(_) => return,
         };
 
+        // A crash or a forced quit leaves loose frames exactly where they
+        // were written, since nothing here is buffered only in memory. This
+        // is what turns them into their zip on the next launch, so a stretch
+        // never sits unarchived just because it happened to be running when
+        // the app last closed. The bucket the clock is inside right now is
+        // deliberately skipped: it may still be genuinely open, and it is
+        // this loop, not a one-off sweep, that owns closing it.
+        let now = chrono::Local::now();
+        let today = now.format("%Y-%m-%d").to_string();
+        let now_bucket = capture::bucket_start(&now.format("%H%M").to_string());
+        let _ = capture::recover(&root, &today, &now_bucket);
+
         // A gigabyte, well above one bucket, so capture stops with room to
         // spare rather than at the point the disk is already unusable. Nothing
         // is ever deleted to make room; refusing to be the process that fills

@@ -221,6 +221,7 @@ mod tests {
             gap_minutes: 0,
             unreferenced_minutes: 0,
             logs_externally: false,
+            capture: CaptureKinds::default(),
             phase: Phase::Accounting,
             state: State::Running,
             gaps: vec![],

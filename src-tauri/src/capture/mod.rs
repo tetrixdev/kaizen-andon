@@ -108,19 +108,15 @@ pub enum Tick {
     Titles,
 }
 
-/// A quarter hour of frames, held in memory until it is sealed into a zip.
-struct Bucket {
-    day: String,
-    start: String,
-    frames: Vec<(String, Vec<u8>)>,
-    lines: Vec<String>,
-}
-
 pub struct Recorder<S: Source> {
     source: S,
     root: PathBuf,
     floor_bytes: u64,
-    bucket: Option<Bucket>,
+    /// The bucket the last tick wrote into, so a rollover can be noticed and
+    /// the one behind it sealed. Holds no data of its own: every frame and
+    /// every line is already on disk the moment it is written, so there is
+    /// nothing here a crash could lose.
+    open: Option<(String, String)>,
     last_hash: Option<[u8; 32]>,
 }
 
@@ -130,7 +126,7 @@ impl<S: Source> Recorder<S> {
             source,
             root,
             floor_bytes,
-            bucket: None,
+            open: None,
             last_hash: None,
         }
     }
@@ -147,13 +143,13 @@ impl<S: Source> Recorder<S> {
         screen: bool,
     ) -> Result<Tick, String> {
         if !activity && !screen {
-            self.seal()?;
+            self.close_open()?;
             return Ok(Tick::Resting);
         }
 
         let free = self.source.free_bytes(&self.root);
         if free < self.floor_bytes {
-            self.seal()?;
+            self.close_open()?;
             return Ok(Tick::NoRoom {
                 free_mb: free / 1_048_576,
             });
@@ -189,6 +185,10 @@ impl<S: Source> Recorder<S> {
         Ok(Tick::Kept { bytes })
     }
 
+    /// Write immediately: the line to the day's TSV, the frame (if any) to
+    /// its own loose file. Nothing here is held only in memory, so a crash or
+    /// a forced quit can lose at most the current minute, never the fourteen
+    /// before it.
     fn push(
         &mut self,
         (day, minute): (&str, &str),
@@ -198,19 +198,20 @@ impl<S: Source> Recorder<S> {
     ) -> Result<(), String> {
         let start = bucket_start(minute);
 
-        match &self.bucket {
-            Some(open) if open.day == day && open.start == start => {}
-            // A new quarter, or midnight. Either way the open one is finished.
-            _ => {
-                self.seal()?;
-                self.bucket = Some(Bucket {
-                    day: day.to_string(),
-                    start,
-                    frames: Vec::new(),
-                    lines: Vec::new(),
-                });
-            }
+        // Crossing into a new quarter, or a new day, means the one behind it
+        // is finished and may as well be zipped now rather than left loose
+        // until something else notices.
+        if self
+            .open
+            .as_ref()
+            .is_some_and(|(d, s)| d != day || s != &start)
+        {
+            self.close_open()?;
         }
+        self.open = Some((day.to_string(), start));
+
+        let dir = self.root.join(day);
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
         let line = format!(
             "{}\t{}\t{}\t{}\t{}",
@@ -221,10 +222,9 @@ impl<S: Source> Recorder<S> {
             probe.title.replace(['\t', '\n', '\r'], " ")
         );
 
-        // The day's TSV is appended live and never sealed, so a checkpoint can
-        // read the day, or grep it, without unzipping anything at all.
-        let dir = self.root.join(day);
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        // The day's TSV is one file, appended live, never sealed and never
+        // touched by archiving: a checkpoint reads or greps the whole day
+        // without unzipping anything.
         let mut f = OpenOptions::new()
             .create(true)
             .append(true)
@@ -232,58 +232,23 @@ impl<S: Source> Recorder<S> {
             .map_err(|e| e.to_string())?;
         writeln!(f, "{line}").map_err(|e| e.to_string())?;
 
-        let bucket = self.bucket.as_mut().expect("just opened");
-        bucket.lines.push(line);
         if let Some(frame) = frame {
-            bucket.frames.push((format!("{minute}.jpg"), frame));
+            // Prefixed with the day, matching the zip's own filename, so pure
+            // alphabetical order in the folder is pure chronological order.
+            // A bare "2100.jpg" ties the leading digit of any "2026-..." name
+            // and sorts AFTER it from there, which is not a 2026 quirk: every
+            // year this decade shares that "202" prefix, so a bare hour would
+            // flip position mid-afternoon indefinitely, not just this year.
+            fs::write(dir.join(format!("{day}_{minute}.jpg")), frame).map_err(|e| e.to_string())?;
         }
         Ok(())
     }
 
-    /// Close the open bucket into its zip. Written to `.part` and renamed, so a
-    /// crash mid-write cannot leave a torn archive and a reader never opens a
-    /// half-written one.
-    pub fn seal(&mut self) -> Result<(), String> {
-        let Some(bucket) = self.bucket.take() else {
-            return Ok(());
-        };
-        if bucket.lines.is_empty() {
-            return Ok(());
+    /// Seal whichever bucket this recorder was last writing into, if any.
+    fn close_open(&mut self) -> Result<(), String> {
+        if let Some((day, start)) = self.open.take() {
+            seal_bucket(&self.root, &day, &start)?;
         }
-
-        let dir = self.root.join(&bucket.day);
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-
-        let name = zip_name(&bucket.day, &bucket.start);
-        let part = dir.join(format!("{name}.part"));
-        let mut zip = zip::ZipWriter::new(File::create(&part).map_err(|e| e.to_string())?);
-
-        // Deflate the frames as well as the text, which is NOT the obvious
-        // call and was got wrong here first. "JPEG is already compressed" is
-        // true of the pixels and false of the file: an encoder shipping the
-        // standard Huffman tables rather than optimised ones leaves real
-        // redundancy in the entropy-coded stream, and deflate takes it.
-        // Measured on a screenshot re-encoded at this exact quality it took
-        // another 35% off, and MORE at lower quality rather than less.
-        //
-        // The asymmetry settles it rather than that number, which varies by
-        // encoder: the downside is bounded at roughly no saving for one pass
-        // per quarter hour, and the upside is a third of the archive.
-        let squeezed = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
-
-        zip.start_file("titles.tsv", squeezed)
-            .map_err(|e| e.to_string())?;
-        zip.write_all(bucket.lines.join("\n").as_bytes())
-            .map_err(|e| e.to_string())?;
-
-        for (name, bytes) in &bucket.frames {
-            zip.start_file(name, squeezed).map_err(|e| e.to_string())?;
-            zip.write_all(bytes).map_err(|e| e.to_string())?;
-        }
-
-        zip.finish().map_err(|e| e.to_string())?;
-        fs::rename(&part, dir.join(&name)).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -292,6 +257,140 @@ impl<S: Source> Recorder<S> {
     pub fn size_bytes(&self) -> u64 {
         walk(&self.root)
     }
+}
+
+/// Zip whichever loose frames exist for one 15-minute bucket. A free function
+/// rather than a method, so a startup sweep with no live `Recorder` can reuse
+/// the exact same logic a running one uses when a quarter rolls over — one
+/// path that may zip and delete, never two that could disagree.
+///
+/// A zip is images only. The day's TSV already holds the record of every
+/// minute, kept or not, so a bucket with nothing kept in it (titles-only, or a
+/// screen that simply never changed) has nothing to consolidate and gets no
+/// zip at all. An empty archive would say less than no archive does.
+///
+/// Idempotent by construction: if the zip already exists, NOTHING is touched,
+/// loose files included. Deletion happens only in the one branch that just
+/// finished writing and renaming a zip successfully, immediately after, and
+/// only for the exact files that went into it. There is no separate cleanup
+/// pass with its own opinion about what may be removed.
+pub fn seal_bucket(root: &Path, day: &str, start: &str) -> Result<(), String> {
+    let dir = root.join(day);
+    let name = zip_name(day, start);
+
+    if dir.join(&name).exists() {
+        return Ok(());
+    }
+
+    // The zip entry stays bare (just "0930.jpg"): the archive's own filename
+    // already carries the date, so repeating it inside every entry would be
+    // pure redundancy in a listing nobody browses outside this one day.
+    let present: Vec<(String, PathBuf)> = minutes_in_bucket(start)
+        .into_iter()
+        .map(|m| (format!("{m}.jpg"), dir.join(format!("{day}_{m}.jpg"))))
+        .filter(|(_, path)| path.exists())
+        .collect();
+
+    if present.is_empty() {
+        return Ok(());
+    }
+
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let part = dir.join(format!("{name}.part"));
+    let mut zip = zip::ZipWriter::new(File::create(&part).map_err(|e| e.to_string())?);
+
+    // Deflate, which is NOT the obvious call and was got wrong here first.
+    // "JPEG is already compressed" is true of the pixels and false of the
+    // file: an encoder shipping the standard Huffman tables rather than
+    // optimised ones leaves real redundancy in the entropy-coded stream, and
+    // deflate takes it. Measured on a screenshot re-encoded at this exact
+    // quality it took another 35% off, and MORE at lower quality rather than
+    // less, so the downside of trying is bounded at roughly nothing.
+    let squeezed = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    for (fname, path) in &present {
+        let bytes = fs::read(path).map_err(|e| e.to_string())?;
+        zip.start_file(fname, squeezed).map_err(|e| e.to_string())?;
+        zip.write_all(&bytes).map_err(|e| e.to_string())?;
+    }
+
+    zip.finish().map_err(|e| e.to_string())?;
+    fs::rename(&part, dir.join(&name)).map_err(|e| e.to_string())?;
+
+    // Only now, having a verified zip on disk under its real name, remove the
+    // loose duplicates. If this loop is interrupted, the zip already exists
+    // and the next call for this bucket returns at the very first line.
+    for (_, path) in &present {
+        let _ = fs::remove_file(path);
+    }
+    Ok(())
+}
+
+/// Every minute floor covers, in order: "0930" -> 0930..=0944.
+fn minutes_in_bucket(start: &str) -> Vec<String> {
+    let (h, m) = start.split_at(2);
+    let base = h.parse::<u32>().unwrap_or(0) * 60 + m.parse::<u32>().unwrap_or(0);
+
+    (0..BUCKET_MINUTES)
+        .map(|i| {
+            let t = base + i;
+            format!("{:02}{:02}", (t / 60) % 24, t % 60)
+        })
+        .collect()
+}
+
+/// Zip every closed bucket that has loose frames still waiting, across every
+/// day the archive holds. Meant to run once at startup: a crash or a forced
+/// quit leaves loose files behind exactly where they were written, and this
+/// is what turns them into their zip on the next launch rather than leaving
+/// them loose forever.
+///
+/// `today` and `now_bucket` name the one bucket that is deliberately left
+/// alone: it may still be open and belongs to the running tick loop, not to a
+/// one-off sweep that could race it.
+pub fn recover(root: &Path, today: &str, now_bucket: &str) -> Result<(), String> {
+    let Ok(days) = fs::read_dir(root) else {
+        return Ok(());
+    };
+
+    for day_entry in days.flatten() {
+        let Ok(file_type) = day_entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let day = day_entry.file_name().to_string_lossy().into_owned();
+
+        let Ok(files) = fs::read_dir(day_entry.path()) else {
+            continue;
+        };
+
+        // Loose files are "{day}_{minute}.jpg"; the day prefix is stripped
+        // rather than trusted, so a stray file from anywhere else is simply
+        // not recognised rather than mis-parsed.
+        let prefix = format!("{day}_");
+        let mut starts: Vec<String> = files
+            .flatten()
+            .filter_map(|f| {
+                let name = f.file_name().to_string_lossy().into_owned();
+                let minute = name.strip_prefix(&prefix)?.strip_suffix(".jpg")?;
+                (minute.len() == 4 && minute.chars().all(|c| c.is_ascii_digit()))
+                    .then(|| bucket_start(minute))
+            })
+            .collect();
+        starts.sort();
+        starts.dedup();
+
+        for start in starts {
+            if day == today && start == now_bucket {
+                continue;
+            }
+            seal_bucket(root, &day, &start)?;
+        }
+    }
+    Ok(())
 }
 
 /// Where the archive lives under an app data directory.
@@ -316,7 +415,7 @@ pub fn activity_for(root: &Path, day: &str) -> Option<String> {
 }
 
 /// Floor a minute to its quarter: 0914 -> 0900, 0915 -> 0915.
-fn bucket_start(minute: &str) -> String {
+pub fn bucket_start(minute: &str) -> String {
     let (h, m) = minute.split_at(2);
     let m: u32 = m.parse().unwrap_or(0);
     format!("{h}{:02}", (m / BUCKET_MINUTES) * BUCKET_MINUTES)
@@ -481,6 +580,62 @@ mod tests {
     }
 
     #[test]
+    fn a_bucket_names_every_minute_it_covers() {
+        assert_eq!(
+            minutes_in_bucket("0900"),
+            vec![
+                "0900", "0901", "0902", "0903", "0904", "0905", "0906", "0907", "0908", "0909",
+                "0910", "0911", "0912", "0913", "0914"
+            ]
+        );
+        // The day's last bucket stays inside the day; it does not wrap to
+        // 0000 the way the zip's END LABEL does for display.
+        assert_eq!(minutes_in_bucket("2345").last().unwrap(), "2359");
+    }
+
+    #[test]
+    fn a_loose_filename_sorts_chronologically_against_every_dated_file_all_day() {
+        // The bug this guards: a bare "2100.jpg" ties the leading '2' of
+        // "2026-...", and the comparison falls through to digits that are
+        // now comparing an HOUR against a YEAR. Past that tie it reads as
+        // greater, so the file flips from sorting before every dated name to
+        // sorting after all of them — and because 2020-2029 all start "202",
+        // this is not a one-off quirk of this particular year.
+        //
+        // Prefixing the loose name with the day removes the coincidence
+        // entirely: every name in the folder now starts with the same date,
+        // so alphabetical order cannot help but be chronological order.
+        // Built in one chronological pass rather than by asserting where a
+        // zip "should" land: a zip's name and its same-minute loose file
+        // share every character up to '-' vs '.', and '-' (0x2D) sorts
+        // before '.' (0x2E), so the zip belongs immediately before the loose
+        // file for the minute it starts on. Getting that placement right by
+        // hand once, elsewhere, is exactly the kind of mistake this test
+        // exists to catch on every future change instead.
+        let day = "2026-08-24";
+        let mut names = vec![format!("{day}.tsv")];
+        for hour in 0..24 {
+            for minute in [0, 30] {
+                let hhmm = format!("{hour:02}{minute:02}");
+                if hhmm == "0900" {
+                    names.push(format!("{day}_0900-0915.zip"));
+                }
+                if hhmm == "2030" {
+                    names.push(format!("{day}_2030-2045.zip"));
+                }
+                names.push(format!("{day}_{hhmm}.jpg"));
+            }
+        }
+
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(
+            sorted, names,
+            "alphabetical order was not already chronological order"
+        );
+    }
+
+    #[test]
     fn monitors_are_laid_out_side_by_side_in_one_image() {
         let wide = encode(vec![
             Shot {
@@ -519,8 +674,22 @@ mod tests {
     }
 
     #[test]
+    fn frames_land_on_disk_the_moment_they_are_taken() {
+        // The whole point of dropping the in-memory bucket: nothing here may
+        // be lost to a crash, because nothing here is held only in memory.
+        let root = scratch();
+        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
+
+        rec.tick(("2026-08-24", "0900"), true, true).unwrap();
+
+        assert!(root.join("2026-08-24/2026-08-24_0900.jpg").exists());
+        assert!(!root.join("2026-08-24/2026-08-24_0900-0915.zip").exists());
+    }
+
+    #[test]
     fn an_unchanged_screen_costs_a_line_rather_than_a_file() {
-        let mut rec = Recorder::new(Fake::new(), scratch(), 0);
+        let root = scratch();
+        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
 
         assert!(matches!(
             rec.tick(("2026-08-20", "0900"), true, true).unwrap(),
@@ -530,25 +699,30 @@ mod tests {
             rec.tick(("2026-08-20", "0901"), true, true).unwrap(),
             Tick::Unchanged
         );
+        assert!(!root.join("2026-08-20/2026-08-20_0901.jpg").exists());
 
         *rec.source.pixel.borrow_mut() = 200; // the screen changed
         assert!(matches!(
             rec.tick(("2026-08-20", "0902"), true, true).unwrap(),
             Tick::Kept { .. }
         ));
+        assert!(root.join("2026-08-20/2026-08-20_0902.jpg").exists());
     }
 
     #[test]
     fn a_locked_workstation_is_recorded_but_not_pictured() {
-        let mut rec = Recorder::new(Fake::new(), scratch(), 0);
+        let root = scratch();
+        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
         rec.source.probe.borrow_mut().locked = true;
 
         assert_eq!(
             rec.tick(("2026-08-20", "0900"), true, true).unwrap(),
             Tick::Away
         );
-        assert!(rec.bucket.as_ref().unwrap().frames.is_empty());
-        assert_eq!(rec.bucket.as_ref().unwrap().lines.len(), 1);
+        assert!(!root.join("2026-08-20/2026-08-20_0900.jpg").exists());
+        assert!(fs::read_to_string(root.join("2026-08-20/2026-08-20.tsv"))
+            .unwrap()
+            .contains("\tlocked\t"));
     }
 
     #[test]
@@ -563,7 +737,8 @@ mod tests {
         );
 
         assert!(root.join("2026-08-20/2026-08-20_0900-0915.zip").exists());
-        assert!(rec.bucket.is_none());
+        // The loose original is gone the moment its zip is verified on disk.
+        assert!(!root.join("2026-08-20/2026-08-20_0900.jpg").exists());
     }
 
     #[test]
@@ -590,7 +765,117 @@ mod tests {
         rec.tick(("2026-08-20", "0915"), true, true).unwrap();
 
         assert!(root.join("2026-08-20/2026-08-20_0900-0915.zip").exists());
-        assert_eq!(rec.bucket.as_ref().unwrap().start, "0915");
+        assert!(root.join("2026-08-20/2026-08-20_0915.jpg").exists());
+    }
+
+    #[test]
+    fn a_bucket_with_no_kept_frames_gets_no_zip_at_all() {
+        // Screen capture on, but the picture never changes: every minute in
+        // THIS bucket dedupes to "same" and nothing is ever kept. The TSV
+        // already has the full record, so an empty archive would say less
+        // than none.
+        //
+        // A fresh Recorder's very first frame is always Kept — there is
+        // nothing yet to compare it against — so this warms last_hash up in
+        // the PRECEDING bucket first, and only then holds the screen still
+        // for the one under test.
+        let root = scratch();
+        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
+
+        rec.tick(("2026-08-20", "0845"), true, true).unwrap();
+
+        for minute in ["0900", "0901", "0902"] {
+            assert_eq!(
+                rec.tick(("2026-08-20", minute), true, true).unwrap(),
+                Tick::Unchanged
+            );
+        }
+        rec.tick(("2026-08-20", "0915"), false, false).unwrap(); // seals 0900
+
+        assert!(!root.join("2026-08-20/2026-08-20_0900-0915.zip").exists());
+        assert!(
+            fs::read_to_string(root.join("2026-08-20/2026-08-20.tsv"))
+                .unwrap()
+                .lines()
+                .filter(|l| l.contains("\tsame\t"))
+                .count()
+                == 3
+        );
+    }
+
+    #[test]
+    fn titles_without_pictures_gets_no_zip_either() {
+        // A context may want to know which program was in front without a
+        // photograph of what was in it. Since a zip is images only, that
+        // preference means no archive for the quarter at all — the day's
+        // TSV is the whole record.
+        let root = scratch();
+        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
+
+        assert_eq!(
+            rec.tick(("2026-08-23", "0900"), true, false).unwrap(),
+            Tick::Titles
+        );
+        rec.tick(("2026-08-23", "0915"), false, false).unwrap(); // seals 0900
+
+        assert!(!root.join("2026-08-23/2026-08-23_0900-0915.zip").exists());
+        let tsv = fs::read_to_string(root.join("2026-08-23/2026-08-23.tsv")).unwrap();
+        assert!(tsv.contains("OUTLOOK.EXE"), "the line was written: {tsv}");
+        assert!(
+            tsv.contains("\ttitles\t"),
+            "and says why there is no frame: {tsv}"
+        );
+    }
+
+    #[test]
+    fn a_sealed_quarter_holds_only_images() {
+        let root = scratch();
+        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
+
+        rec.tick(("2026-08-20", "0900"), true, true).unwrap();
+        *rec.source.pixel.borrow_mut() = 77;
+        rec.tick(("2026-08-20", "0901"), true, true).unwrap();
+        rec.tick(("2026-08-20", "0915"), false, false).unwrap(); // seals
+
+        let path = root.join("2026-08-20/2026-08-20_0900-0915.zip");
+        let zip = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
+        let names: Vec<String> = zip.file_names().map(String::from).collect();
+
+        // Entries are bare: the archive's own filename already carries the
+        // date, so repeating it in every entry would be pure redundancy.
+        assert!(names.contains(&"0900.jpg".to_string()), "{names:?}");
+        assert!(names.contains(&"0901.jpg".to_string()), "{names:?}");
+        assert!(
+            !names.iter().any(|n| n.ends_with(".tsv")),
+            "the day's TSV lives once, outside every zip: {names:?}"
+        );
+        assert!(!path.with_extension("zip.part").exists());
+    }
+
+    #[test]
+    fn sealing_an_already_sealed_bucket_touches_nothing() {
+        // The unplug-and-reconnect case: a zip already exists, so this must
+        // do nothing at all rather than repack, and — the specific worry —
+        // must not delete a loose file that happens to still be lying beside
+        // it, because deletion is only ever a consequence of THIS call
+        // writing that exact zip, and this call is not writing one.
+        let root = scratch();
+        let dir = root.join("2026-08-20");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("2026-08-20_0900-0915.zip"), b"already here").unwrap();
+        fs::write(dir.join("2026-08-20_0900.jpg"), b"stray loose copy").unwrap();
+
+        seal_bucket(&root, "2026-08-20", "0900").unwrap();
+
+        assert_eq!(
+            fs::read(dir.join("2026-08-20_0900-0915.zip")).unwrap(),
+            b"already here",
+            "the existing zip was not rewritten"
+        );
+        assert!(
+            dir.join("2026-08-20_0900.jpg").exists(),
+            "a loose file beside an existing zip is left alone, not swept"
+        );
     }
 
     #[test]
@@ -617,65 +902,6 @@ mod tests {
     }
 
     #[test]
-    fn a_sealed_quarter_stands_on_its_own() {
-        let root = scratch();
-        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
-
-        rec.tick(("2026-08-20", "0900"), true, true).unwrap();
-        *rec.source.pixel.borrow_mut() = 77;
-        rec.tick(("2026-08-20", "0901"), true, true).unwrap();
-        rec.seal().unwrap();
-
-        let path = root.join("2026-08-20/2026-08-20_0900-0915.zip");
-        let mut zip = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
-        let names: Vec<String> = zip.file_names().map(String::from).collect();
-
-        assert!(names.contains(&"titles.tsv".to_string()), "{names:?}");
-        assert!(names.contains(&"0900.jpg".to_string()), "{names:?}");
-        assert!(names.contains(&"0901.jpg".to_string()), "{names:?}");
-        // Nothing is left half written beside it.
-        assert!(!root
-            .join("2026-08-20/2026-08-20_0900-0915.zip.part")
-            .exists());
-        assert!(zip.by_name("titles.tsv").is_ok());
-    }
-
-    #[test]
-    fn titles_without_pictures_is_a_supported_arrangement() {
-        // A context may want to know which program was in front without a
-        // photograph of what was in it. That is the whole reason the two
-        // switches are separate rather than one.
-        let root = scratch();
-        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
-
-        assert_eq!(
-            rec.tick(("2026-08-23", "0900"), true, false).unwrap(),
-            Tick::Titles
-        );
-
-        rec.seal().unwrap();
-        let tsv = fs::read_to_string(root.join("2026-08-23/2026-08-23.tsv")).unwrap();
-
-        assert!(tsv.contains("OUTLOOK.EXE"), "the line was written: {tsv}");
-        assert!(
-            tsv.contains("\ttitles\t"),
-            "and says why there is no frame: {tsv}"
-        );
-
-        let zip = zip::ZipArchive::new(
-            File::open(root.join("2026-08-23/2026-08-23_0900-0915.zip")).unwrap(),
-        )
-        .unwrap();
-        let names: Vec<String> = zip.file_names().map(String::from).collect();
-
-        assert!(names.contains(&"titles.tsv".to_string()), "{names:?}");
-        assert!(
-            !names.iter().any(|n| n.ends_with(".jpg")),
-            "a picture was taken anyway: {names:?}"
-        );
-    }
-
-    #[test]
     fn the_days_activity_is_readable_without_a_recorder() {
         // The prompt is assembled by a command, not by the capture thread, so
         // reading the day cannot require holding the recorder.
@@ -688,5 +914,55 @@ mod tests {
 
         let text = activity_for(&root, "2026-08-23").expect("the day reads back");
         assert!(text.contains("OUTLOOK.EXE"), "{text}");
+    }
+
+    #[test]
+    fn recovery_zips_a_bucket_a_previous_session_never_closed() {
+        // Simulates the crash case directly, with no live Recorder at all:
+        // loose files simply exist on disk, as they would after a forced
+        // quit, and recover() alone has to turn them into a zip.
+        let root = scratch();
+        let dir = root.join("2026-08-20");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("2026-08-20.tsv"),
+            "0900\t0\tkept\tOUTLOOK.EXE\tInbox\n",
+        )
+        .unwrap();
+        fs::write(dir.join("2026-08-20_0900.jpg"), b"frame").unwrap();
+
+        recover(&root, "2026-08-24", "1200").unwrap();
+
+        assert!(dir.join("2026-08-20_0900-0915.zip").exists());
+        assert!(!dir.join("2026-08-20_0900.jpg").exists());
+    }
+
+    #[test]
+    fn recovery_leaves_the_bucket_the_clock_is_inside_alone() {
+        // That bucket may still be genuinely open and belongs to the running
+        // tick loop; a one-off startup sweep sealing it out from under that
+        // loop would be a race, not a recovery.
+        let root = scratch();
+        let dir = root.join("2026-08-24");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("2026-08-24_1200.jpg"), b"frame").unwrap();
+
+        recover(&root, "2026-08-24", "1200").unwrap();
+
+        assert!(dir.join("2026-08-24_1200.jpg").exists(), "left untouched");
+        assert!(!dir.join("2026-08-24_1200-1215.zip").exists());
+    }
+
+    #[test]
+    fn recovery_is_a_no_op_once_everything_is_already_sealed() {
+        let root = scratch();
+        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
+        rec.tick(("2026-08-20", "0900"), true, true).unwrap();
+        rec.tick(("2026-08-20", "0915"), false, false).unwrap();
+
+        // A second recovery pass over an already-tidy day should not error,
+        // rewrite the zip, or find anything left to do.
+        recover(&root, "2026-08-24", "1200").unwrap();
+        assert!(root.join("2026-08-20/2026-08-20_0900-0915.zip").exists());
     }
 }
