@@ -152,6 +152,16 @@ pub fn raise(window: &tauri::WebviewWindow) -> Result<(), String> {
         return Ok(());
     }
 
+    // A menu tracking loop anywhere counts, ours or the shell's: the tray
+    // icon's own right-click menu is exactly this, and re-asserting topmost
+    // while it is open put the lamp back over it after a tick or two, which
+    // is worse than the problem this loop exists to fix. GUI_INMENUMODE is
+    // Win32's own answer to "is a menu open right now", so this needs no
+    // per-app special-casing.
+    if menu_is_open() {
+        return Ok(());
+    }
+
     let hwnd = window.hwnd().map_err(|e| e.to_string())?;
 
     unsafe {
@@ -166,6 +176,34 @@ pub fn raise(window: &tauri::WebviewWindow) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())
     }
+}
+
+/// Whether any menu, anywhere on the system, is mid-track right now.
+///
+/// `idThread = 0` asks for the foreground thread's own queue, which is
+/// whichever thread currently owns the topmost interaction — explorer's, for
+/// the tray icon's native context menu, or ours, for anything drawn by the
+/// app itself. Either way this is the correct, general signal: it needs no
+/// list of windows to defer to, because it answers the actual question
+/// ("is something modal-ish open") rather than a proxy for it.
+#[cfg(windows)]
+fn menu_is_open() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetGUIThreadInfo, GUITHREADINFO, GUI_INMENUMODE, GUI_POPUPMENUMODE, GUI_SYSTEMMENUMODE,
+    };
+
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+
+    unsafe {
+        if GetGUIThreadInfo(0, &mut info).is_err() {
+            return false;
+        }
+    }
+
+    (info.flags & (GUI_INMENUMODE | GUI_POPUPMENUMODE | GUI_SYSTEMMENUMODE)).0 != 0
 }
 
 #[cfg(not(windows))]

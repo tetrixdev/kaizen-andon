@@ -1,6 +1,6 @@
 [package]
 name = "kaizen-andon"
-version = "0.5.4"
+version = "0.5.5"
 description = "Kaizen Desktop: a lamp for time that is not accounted for yet"
 authors = ["ZeroPlex"]
 edition = "2021"
