@@ -936,19 +936,25 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = place_window(window.clone(), false, None);
 
-                // Hold the front of the topmost band. Another always-on-top
-                // app (Claude's desktop app is one) lands in the same band and
-                // sits above us the moment it is activated, so being topmost
-                // once at startup is not enough to stay visible.
+                // DISABLED, 25 Aug 2026 — not removed, deliberately paused.
                 //
-                // Two seconds is a deliberate floor: fast enough that being
-                // covered reads as a flicker rather than a state, slow enough
-                // that it is one syscall a couple of times a minute. A window
-                // that is hidden or snoozed is skipped inside `raise`.
-                std::thread::spawn(move || loop {
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                    let _ = placement::raise(&window);
-                });
+                // This held the front of the topmost band every 2 seconds,
+                // because another always-on-top app (Claude's desktop app is
+                // one) lands in the same band and sits above us the moment it
+                // is activated. It also fought a screenshot tool and, until
+                // the GUI_INMENUMODE check landed in `raise`, the tray icon's
+                // own right-click menu.
+                //
+                // Off for a while to see whether it is still earning its
+                // keep now that the menu case is fixed, or whether the
+                // screenshot friction outweighs the Claude-Desktop case it
+                // was built for. `raise` and its menu check are untouched
+                // below; re-enable by uncommenting the spawn.
+                let _ = window;
+                // std::thread::spawn(move || loop {
+                //     std::thread::sleep(std::time::Duration::from_secs(2));
+                //     let _ = placement::raise(&window);
+                // });
 
                 start_capture(app.handle().clone());
             }
