@@ -91,6 +91,12 @@ pub struct Entry {
     pub to: String,
     pub minutes: i64,
     pub kind: String,
+    // Nullable rather than a plain String: a row filed before this field
+    // existed carries whatever the original single field held under its old
+    // name, and that migration preserved a pre-existing null as null rather
+    // than inventing a title for a row that never had one.
+    #[serde(default)]
+    pub title: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]

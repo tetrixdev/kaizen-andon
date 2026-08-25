@@ -391,6 +391,25 @@ body {
    tallest thing beside it: the row with the quick chips pulled From and To to
    one height and the reference row sat at another. */
 .editor-grid .inp { flex: none; height: 32px; }
+
+/* The one field in this form that is not a single line. The 32px rule above
+   is right for every other input here and wrong for exactly this one. */
+.editor-grid textarea.inp {
+  height: auto;
+  min-height: 60px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.4;
+}
+
+.fld-optional {
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  color: var(--ink-faint);
+}
 .editor-grid .fld { justify-content: flex-start; }
 
 .setup-note { margin: 0; font-size: 11px; color: var(--ink-faint); line-height: 1.5; }

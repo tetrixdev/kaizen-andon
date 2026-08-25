@@ -136,6 +136,10 @@ pub struct EntryDraft {
     pub from: String,
     pub to: String,
     pub kind: String,
+    // A plain String, not Option, matching from/to/kind above: the widget
+    // refuses to build this payload at all until a title is typed, so by the
+    // time one of these is serialized it is never actually absent.
+    pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

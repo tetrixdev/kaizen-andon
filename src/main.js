@@ -39,7 +39,8 @@ const editTo = document.getElementById('editTo');
 const editFromLabel = document.getElementById('editFromLabel');
 const editQuick = document.getElementById('editQuick');
 const editKind = document.getElementById('editKind');
-const editWhat = document.getElementById('editWhat');
+const editTitle = document.getElementById('editTitle');
+const editDescription = document.getElementById('editDescription');
 const editRef = document.getElementById('editRef');
 const editLink = document.getElementById('editLink');
 const history = document.getElementById('history');
@@ -231,7 +232,7 @@ function renderTrack(l) {
     // A label only where one fits. Two clipped letters inside a fifteen
     // minute block is noise pretending to be information.
     const room = ((to - from) / span) * pixels;
-    const name = e.description ?? (e.kind === 'work' ? 'Work' : 'Rest');
+    const name = e.title ?? (e.kind === 'work' ? 'Work' : 'Rest');
     const label = wide && room > 78 ? `<span class="seg-label">${esc(name)}</span>` : '';
 
     if (e.kind === 'work') {
@@ -302,7 +303,7 @@ function renderEntries(l) {
     return `<div class="erow ${item.kind === 'rest' ? 'rest-row' : ''}" data-kind="entry" data-index="${index}">
       <span class="e-time">${esc(item.from)}–${esc(item.to)}</span>
       <span class="e-dur">${hhmm(item.minutes)}</span>
-      <span class="e-what">${esc(item.description ?? (item.kind === 'work' ? 'Work' : 'Rest'))}</span>
+      <span class="e-what">${esc(item.title ?? (item.kind === 'work' ? 'Work' : 'Rest'))}</span>
       ${pill}
     </div>`;
   });
@@ -829,7 +830,7 @@ function showPop(target, kind, index) {
   const isGap = kind === 'gap';
   popTitle.textContent = isGap
     ? 'Unaccounted'
-    : item.description || (item.kind === 'work' ? 'Work' : 'Rest');
+    : item.title || (item.kind === 'work' ? 'Work' : 'Rest');
   popSpan.textContent = `${item.from}–${item.to} · ${hhmm(item.minutes)}`;
 
   // Shut, the whole card is about a hundred pixels tall and there is no room
@@ -852,6 +853,14 @@ function showPop(target, kind, index) {
     if (item.link) {
       lines.push(`<a class="pop-link" href="${esc(item.link)}" title="${esc(item.link)}" target="_blank" rel="noreferrer">${esc(shortLink(item.link))}</a>`);
     }
+  }
+  // The fuller account, when there is one. Kept to a preview: this is a
+  // hover card, not the place to read a paragraph of markdown.
+  if (!isGap && item.description) {
+    const preview = item.description.length > 160
+      ? item.description.slice(0, 160).trimEnd() + '…'
+      : item.description;
+    lines.push(esc(preview));
   }
   if (isGap) lines.push('Open the day to account for it.');
   popBody.innerHTML = lines.join('<br>');
@@ -1216,7 +1225,8 @@ function openEditor({ gap = null, entry = null, splitAt: at = null, mode = 'entr
 
   editFrom.value = entry?.from ?? gap?.from ?? nowLabel() ?? '';
   editTo.value = at ?? entry?.to ?? gap?.to ?? nowLabel() ?? '';
-  editWhat.value = entry?.description ?? '';
+  editTitle.value = entry?.title ?? '';
+  editDescription.value = entry?.description ?? '';
   editRef.value = entry?.reference ?? '';
   editLink.value = entry?.link ?? '';
   setKind(entry?.kind ?? 'work');
@@ -1279,12 +1289,19 @@ async function fileEntries() {
     return complain('Both times read as 13:45.');
   }
 
+  const title = editTitle.value.trim();
+
+  if (!title) {
+    return complain('A title — short, business terms, what a colleague would recognise.');
+  }
+
   editFrom.value = from;
   editTo.value = to;
 
   const common = {
     kind: currentKind(),
-    description: editWhat.value.trim() || null,
+    title,
+    description: editDescription.value.trim() || null,
     reference: editRef.value.trim() || null,
     link: editLink.value.trim() || null,
   };

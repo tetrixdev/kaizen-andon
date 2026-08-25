@@ -45,8 +45,8 @@ test.beforeAll(async () => {
 test.afterAll(async () => { await new Promise((done) => server.close(done)); });
 
 let nextId = 1;
-const entry = (from, to, minutes, description, referenced) =>
-  ({ id: nextId++, from, to, kind: 'work', minutes, description, referenced,
+const entry = (from, to, minutes, title, referenced) =>
+  ({ id: nextId++, from, to, kind: 'work', minutes, title, referenced,
      reference: referenced ? 'REF-1042' : null,
      link: referenced ? 'https://external.example.com/app/entries/REF-1042' : null });
 
@@ -57,7 +57,7 @@ const LEDGER = (over = {}) => ({
   target_minutes: 480, work_minutes: 331, gap_minutes: 95, unreferenced_minutes: 120,
   entries: [
     entry('08:34', '10:15', 101, 'Ticket triage', true),
-    { id: 900, from: '10:15', to: '10:30', kind: 'rest', minutes: 15, description: 'Coffee' },
+    { id: 900, from: '10:15', to: '10:30', kind: 'rest', minutes: 15, title: 'Coffee' },
     entry('10:30', '12:30', 120, 'Migration work', false),
     entry('14:35', '16:25', 110, 'Review', true),
   ],
@@ -242,6 +242,8 @@ const STATES = [
       await page.evaluate(() => { window.__refuse = '13:00-14:35 overlaps an entry already filed.'; });
       await open(page);
       await page.locator('#track .seg.gap').first().click();
+      await settle(page);
+      await page.locator('#editTitle').fill('Migration work');
       await page.locator('#editorSave').click();
       await expect(page.locator('#editorNote')).toContainText('overlaps');
     } },
@@ -334,17 +336,18 @@ test('clicking a gap fills the span in rather than asking for it', async ({ page
 
   await open(page);
   await page.locator('#track .seg.gap').first().click();
+  await settle(page);
 
   await expect(page.locator('#editFrom')).toHaveValue('13:00');
   await expect(page.locator('#editTo')).toHaveValue('14:35');
 
-  await page.locator('#editWhat').fill('Migration work');
+  await page.locator('#editTitle').fill('Migration work');
   await page.locator('#editorSave').click();
 
   const sent = await page.evaluate(() =>
     window.__calls.filter(([c]) => c === 'save_entries').pop()[1]);
   expect(sent.entries).toHaveLength(1);
-  expect(sent.entries[0]).toMatchObject({ from: '13:00', to: '14:35', kind: 'work' });
+  expect(sent.entries[0]).toMatchObject({ from: '13:00', to: '14:35', kind: 'work', title: 'Migration work' });
   await expect(page.locator('#editor')).toBeHidden();
 });
 
@@ -502,12 +505,14 @@ test('the kind toggle actually toggles', async ({ page }) => {
   await settle(page);
   await open(page);
   await page.locator('#addBtn').click();
+  await settle(page);
 
   await expect(page.locator('.toggle-btn[data-kind="work"]')).toHaveClass(/on/);
   await page.locator('.toggle-btn[data-kind="rest"]').click();
   await expect(page.locator('.toggle-btn[data-kind="rest"]')).toHaveClass(/on/);
   await expect(page.locator('.toggle-btn[data-kind="work"]')).not.toHaveClass(/on/);
 
+  await page.locator('#editTitle').fill('Lunch');
   await page.locator('#editorSave').click();
   const sent = await page.evaluate(() =>
     window.__calls.filter(([c]) => c === 'save_entries').pop()[1]);
@@ -695,7 +700,8 @@ test('the day is started at the time you say, not the moment you clicked', async
   await expect(page.locator('#editFrom')).toHaveValue('14:20');
   await expect(page.locator('#editTo')).toBeHidden();
   await expect(page.locator('#editKind')).toBeHidden();
-  await expect(page.locator('#editWhat')).toBeHidden();
+  await expect(page.locator('#editTitle')).toBeHidden();
+  await expect(page.locator('#editDescription')).toBeHidden();
   await expect(page.locator('#editorSave')).toHaveText('Start the day');
 
   // The button is pressed when you remember, not when it happened.
@@ -840,7 +846,7 @@ test('the link field gets a whole row, being the longest thing here', async ({ p
 
   const widths = await page.evaluate(() => ({
     link: document.getElementById('editLink').getBoundingClientRect().width,
-    what: document.getElementById('editWhat').getBoundingClientRect().width,
+    what: document.getElementById('editTitle').getBoundingClientRect().width,
     ref: document.getElementById('editRef').getBoundingClientRect().width,
     grid: document.querySelector('.editor-grid').getBoundingClientRect().width,
   }));
@@ -868,6 +874,7 @@ test('a time before ten in the morning keeps its zero', async ({ page }) => {
 
   // And whatever gets typed is normalised rather than refused later.
   await page.locator('#editTo').fill('9:5');
+  await page.locator('#editTitle').fill('Early start');
   await page.locator('#editorSave').click();
 
   const sent = await page.evaluate(() =>
@@ -1071,7 +1078,7 @@ test('the rows read in clock order, holes among the entries', async ({ page }) =
   await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER({
     started_at: '08:47',
     entries: [{ id: 5, from: '11:00', to: '11:30', kind: 'work', minutes: 30,
-                description: 'Call with Sanne', referenced: false, reference: null, link: null }],
+                title: 'Call with Sanne', referenced: false, reference: null, link: null }],
     gaps: [{ from: '08:47', to: '11:00', minutes: 133 }, { from: '11:30', to: '11:39', minutes: 9 }],
   })] }, null));
   await page.goto(PAGE);
@@ -1398,4 +1405,62 @@ test('the capture folder can be opened from the dot', async ({ page }) => {
     window.__calls.filter(([c]) => c === 'open_capture_folder').length);
   expect(opened, 'the folder was asked for').toBe(1);
   await expect(page.locator('#recMenu')).toBeHidden();
+});
+
+test('the editor refuses to file without a title', async ({ page }) => {
+  // Server-side this is already enforced (DesktopLedgerController requires
+  // it), but a raw 422 from a blank title reads as the app being broken.
+  // Caught here instead, with a message that says what to type.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+  await page.locator('#track .seg.gap').first().click();
+  await settle(page);
+
+  await page.locator('#editorSave').click();
+
+  await expect(page.locator('#editorNote')).toContainText('title');
+  const attempted = await page.evaluate(() =>
+    window.__calls.some(([c]) => c === 'save_entries'));
+  expect(attempted, 'nothing was sent').toBe(false);
+});
+
+test('title and description both reach the save call, and both come back when reopened', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+  await page.locator('#track .seg.gap').first().click();
+  await settle(page);
+
+  await page.locator('#editTitle').fill('Client call');
+  await page.locator('#editDescription').fill('Discussed the rollout timeline.');
+  await page.locator('#editorSave').click();
+
+  const sent = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'save_entries').pop()[1]);
+  expect(sent.entries[0]).toMatchObject({
+    title: 'Client call',
+    description: 'Discussed the rollout timeline.',
+  });
+});
+
+test('an empty description is sent as null, not as an empty string', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+  await page.locator('#track .seg.gap').first().click();
+  await settle(page);
+
+  await page.locator('#editTitle').fill('Fine');
+  await page.locator('#editorSave').click();
+
+  const sent = await page.evaluate(() =>
+    window.__calls.filter(([c]) => c === 'save_entries').pop()[1]);
+  expect(sent.entries[0].description).toBeNull();
 });
