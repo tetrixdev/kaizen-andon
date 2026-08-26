@@ -85,9 +85,15 @@ pub struct Prompt {
     /// asks to be taught rather than assuming it knows where time lives.
     #[serde(default)]
     pub bootstrap: bool,
-    /// Whether this context takes screenshots at all — config Kaizen already
-    /// holds. `fetch_prompt` uses it to decide whether to mention them; the
-    /// files themselves are never fetched from the server, only local.
+    /// Whether this context takes titles, and whether it takes screenshots —
+    /// config Kaizen already holds. `fetch_prompt` uses these to decide what
+    /// to attach and mention; the files themselves are never fetched from
+    /// the server, only local. A screen-only day still writes a line per
+    /// tick (see capture::Recorder::push), just with no titles in it, so
+    /// "the file has content" cannot answer whether the table is worth
+    /// showing — only this flag can.
+    #[serde(default)]
+    pub captures_activity: bool,
     #[serde(default)]
     pub captures_screen: bool,
     pub prompt: String,

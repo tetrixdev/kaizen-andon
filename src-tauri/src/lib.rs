@@ -644,13 +644,19 @@ fn fetch_prompt(app: AppHandle, date: Option<String>) -> Result<api::Prompt, Str
     // recorder uploads nothing. Handing them to an AI is the operator's own
     // act, which is what pasting a prompt is.
     //
-    // The table exists whenever EITHER switch is on: a screen-capturing tick
-    // writes the same title/process line as an activity-only tick (see
-    // capture::Recorder::tick), so there is no such thing as a picture with
-    // no line, only a line with or without one.
+    // Gated on captures_activity, not on the file being non-empty: a
+    // screen-only day still writes a line per tick (see
+    // capture::Recorder::push), just with no process or title in it, so a
+    // non-empty file alone cannot say whether the table is worth showing —
+    // only Kaizen's own config for this context can.
     let day = prompt.date.clone();
 
-    if let Some(activity) = capture_root(&app).and_then(|root| capture::activity_for(&root, &day)) {
+    let activity = prompt
+        .captures_activity
+        .then(|| capture_root(&app).and_then(|root| capture::activity_for(&root, &day)))
+        .flatten();
+
+    if let Some(activity) = activity {
         prompt.prompt.push_str(
             "\n\n## What this machine was doing\n\n\
              One line per minute, local to this machine and never uploaded: time, seconds \

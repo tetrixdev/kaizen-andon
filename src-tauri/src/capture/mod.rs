@@ -158,14 +158,14 @@ impl<S: Source> Recorder<S> {
         let probe = self.source.probe()?;
 
         if probe.locked {
-            self.push(stamp, &probe, "locked", None)?;
+            self.push(stamp, &probe, "locked", None, activity)?;
             return Ok(Tick::Away);
         }
 
         // A context may want the line without the picture, which is the whole
         // point of the two switches being separate.
         if !screen {
-            self.push(stamp, &probe, "titles", None)?;
+            self.push(stamp, &probe, "titles", None, activity)?;
             return Ok(Tick::Titles);
         }
 
@@ -175,13 +175,13 @@ impl<S: Source> Recorder<S> {
         // Reading one long document is thirty identical screenshots. Storing
         // the first and pointing at it costs a line instead of a file.
         if self.last_hash == Some(hash) {
-            self.push(stamp, &probe, "same", None)?;
+            self.push(stamp, &probe, "same", None, activity)?;
             return Ok(Tick::Unchanged);
         }
 
         let bytes = frame.len();
         self.last_hash = Some(hash);
-        self.push(stamp, &probe, "kept", Some(frame))?;
+        self.push(stamp, &probe, "kept", Some(frame), activity)?;
         Ok(Tick::Kept { bytes })
     }
 
@@ -189,12 +189,19 @@ impl<S: Source> Recorder<S> {
     /// its own loose file. Nothing here is held only in memory, so a crash or
     /// a forced quit can lose at most the current minute, never the fourteen
     /// before it.
+    ///
+    /// `activity` decides whether the process and window title are part of
+    /// the line at all, not just whether they're shown later: agreeing to a
+    /// screenshot is not agreeing to a searchable text log of every program
+    /// and window touched, so a tick that ran under screen-only records just
+    /// the timing and frame state, nothing that names what was on screen.
     fn push(
         &mut self,
         (day, minute): (&str, &str),
         probe: &Probe,
         note: &str,
         frame: Option<Vec<u8>>,
+        activity: bool,
     ) -> Result<(), String> {
         let start = bucket_start(minute);
 
@@ -213,14 +220,18 @@ impl<S: Source> Recorder<S> {
         let dir = self.root.join(day);
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
-        let line = format!(
-            "{}\t{}\t{}\t{}\t{}",
-            minute,
-            probe.idle_secs,
-            note,
-            probe.process,
-            probe.title.replace(['\t', '\n', '\r'], " ")
-        );
+        let line = if activity {
+            format!(
+                "{}\t{}\t{}\t{}\t{}",
+                minute,
+                probe.idle_secs,
+                note,
+                probe.process,
+                probe.title.replace(['\t', '\n', '\r'], " ")
+            )
+        } else {
+            format!("{minute}\t{}\t{note}", probe.idle_secs)
+        };
 
         // The day's TSV is one file, appended live, never sealed and never
         // touched by archiving: a checkpoint reads or greps the whole day
@@ -824,6 +835,36 @@ mod tests {
         assert!(
             tsv.contains("\ttitles\t"),
             "and says why there is no frame: {tsv}"
+        );
+    }
+
+    #[test]
+    fn a_picture_without_activity_carries_no_title() {
+        // The reverse of titles_without_pictures: screen on, activity off.
+        // Agreeing to a screenshot is not agreeing to a searchable text log
+        // of every program and window touched, so the line still exists
+        // (timing, idle, frame state) but names nothing.
+        let root = scratch();
+        let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
+
+        assert!(matches!(
+            rec.tick(("2026-08-23", "0900"), false, true).unwrap(),
+            Tick::Kept { .. }
+        ));
+        rec.tick(("2026-08-23", "0915"), false, false).unwrap(); // seals 0900
+
+        let tsv = fs::read_to_string(root.join("2026-08-23/2026-08-23.tsv")).unwrap();
+        assert!(
+            !tsv.contains("OUTLOOK.EXE") && !tsv.contains("Inbox"),
+            "no process or title without activity: {tsv}"
+        );
+        assert!(
+            tsv.contains("0900\t0\tkept"),
+            "timing and frame state still recorded: {tsv}"
+        );
+        assert!(
+            root.join("2026-08-23/2026-08-23_0900-0915.zip").exists(),
+            "the picture is still taken"
         );
     }
 
