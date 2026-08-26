@@ -644,9 +644,10 @@ fn fetch_prompt(app: AppHandle, date: Option<String>) -> Result<api::Prompt, Str
     // recorder uploads nothing. Handing them to an AI is the operator's own
     // act, which is what pasting a prompt is.
     //
-    // Screenshots are deliberately not attached. A title is a line naming a
-    // program and a window; a picture is everything that was on the screen,
-    // including whatever somebody else sent you.
+    // The table exists whenever EITHER switch is on: a screen-capturing tick
+    // writes the same title/process line as an activity-only tick (see
+    // capture::Recorder::tick), so there is no such thing as a picture with
+    // no line, only a line with or without one.
     let day = prompt.date.clone();
 
     if let Some(activity) = capture_root(&app).and_then(|root| capture::activity_for(&root, &day)) {
@@ -659,6 +660,20 @@ fn fetch_prompt(app: AppHandle, date: Option<String>) -> Result<api::Prompt, Str
         );
         prompt.prompt.push_str(activity.trim());
         prompt.prompt.push_str("\n```");
+    }
+
+    // The pictures themselves are still never attached — a title is a line
+    // naming a program and a window, a picture is everything that was on the
+    // screen, including whatever somebody else sent you — but an AI reading
+    // this has no way to know they even exist unless told, so a context that
+    // takes them gets one line saying so and how to ask for a specific one.
+    if prompt.captures_screen {
+        prompt.prompt.push_str(
+            "\n\nScreenshots are also captured here, roughly one a minute, never uploaded. \
+             If the log above still leaves a gap unclear, ask the person you're talking to \
+             to open that minute's screenshot (tray icon → Open capture folder) rather than \
+             guessing what filled it.",
+        );
     }
 
     Ok(prompt)

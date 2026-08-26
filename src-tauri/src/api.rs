@@ -85,6 +85,11 @@ pub struct Prompt {
     /// asks to be taught rather than assuming it knows where time lives.
     #[serde(default)]
     pub bootstrap: bool,
+    /// Whether this context takes screenshots at all — config Kaizen already
+    /// holds. `fetch_prompt` uses it to decide whether to mention them; the
+    /// files themselves are never fetched from the server, only local.
+    #[serde(default)]
+    pub captures_screen: bool,
     pub prompt: String,
 }
 
