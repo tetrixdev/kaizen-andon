@@ -309,7 +309,7 @@ function renderEntries(l) {
   });
 
   entriesEl.innerHTML = rows.join('') || '<div class="erow"><span class="e-what">Nothing filed yet.</span></div>';
-  slabTitle.textContent = `${l.context} · ${l.date}`;
+  slabTitle.textContent = `${l.area} · ${l.date}`;
   slabHint.textContent = l.logs_externally
     ? 'Work here is logged in another system too, so an entry counts only with a reference and a link.'
     : '';
@@ -346,7 +346,7 @@ function render(l) {
   // target sitting in the middle of it would be both unreachable when clipped
   // and a hole in the click area when not. Opening is the natural first step
   // anyway: you cannot read a time you want to correct until you can see it.
-  const bits = [esc(l.context)];
+  const bits = [esc(l.area)];
   if (l.target_minutes) bits.push(`${hhmm(l.work_minutes)} of ${hhmm(l.target_minutes)} logged`);
   if (l.started_at) bits.push(`<button type="button" class="amend" data-mode="start">started ${esc(l.started_at)}</button>`);
   if (l.ended_at) bits.push(`<button type="button" class="amend" data-mode="end">ended ${esc(l.ended_at)}</button>`);
@@ -361,7 +361,7 @@ function render(l) {
   // The card can be hidden or snoozed; the tray is the one surface always
   // there, so it carries the number.
   const [amount, what] = [delta.textContent, deltaLabel.textContent];
-  invoke('set_tooltip', { text: `Kaizen · ${amount} ${what} · ${l.context}` }).catch(() => {});
+  invoke('set_tooltip', { text: `Kaizen · ${amount} ${what} · ${l.area}` }).catch(() => {});
 
   // The tray's Hide item follows the same rule the lamp does: amber is a nudge
   // and may be put away, red insists. Pushed from here because this is the
@@ -774,7 +774,7 @@ async function failed(where, doing, error, args = null) {
       '',
       `When:    ${new Date().toISOString()}`,
       `Viewing: ${viewDate ?? 'today'}${started ? ` (Kaizen clock ${nowLabel()})` : ''}`,
-      `Context: ${ledger?.context ?? 'none loaded'}`,
+      `Area: ${ledger?.area ?? 'none loaded'}`,
       args ? `Arguments: ${JSON.stringify(args)}` : null,
       '',
       Object.entries(await diagnostics())

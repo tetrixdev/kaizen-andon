@@ -4,7 +4,97 @@
 //! and the web page can never drift on what a hole is. What lives here is only
 //! the reading: which state came back, and how to say a number of minutes.
 
+use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize};
+
+/// The name of the thing a day is kept for: what Kaizen called a context until
+/// the rename, and calls an area after it.
+///
+/// A type of its own, flattened into everything that carries it, because the
+/// obvious spelling is wrong in a way that only shows up halfway through the
+/// migration. `#[serde(alias = "context")]` on a field named `area` does read
+/// either key, but serde treats a name and its aliases as ONE field, so a
+/// payload carrying both is a `duplicate field` error rather than a value. And
+/// carrying both is exactly what Kaizen does, deliberately, for the whole
+/// overlap between the two names: the aliased version would refuse to parse a
+/// single day during precisely the window it exists to cover. Reading the pair
+/// by hand is the only shape that takes either spelling AND both at once.
+///
+/// Absent altogether is an empty name rather than a parse failure. A missing
+/// label is a blank word on the card, which is visible; refusing the payload
+/// loses the whole day, and still showing a number when something upstream has
+/// moved is the one thing this widget is for.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Area(String);
+
+impl Area {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for Area {
+    fn from(name: &str) -> Self {
+        Area(name.to_owned())
+    }
+}
+
+impl From<String> for Area {
+    fn from(name: String) -> Self {
+        Area(name)
+    }
+}
+
+impl Serialize for Area {
+    /// Flattened, so this has to be a map rather than a bare string. It goes
+    /// out under the new name only: the one thing that reads it is the
+    /// frontend in this same repo, which ships in the same binary and can
+    /// therefore be moved in the same commit. Nothing outside the process ever
+    /// sees this side.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(1))?;
+        map.serialize_entry("area", &self.0)?;
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Area {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct AreaVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for AreaVisitor {
+            type Value = Area;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an object carrying \"area\", \"context\", or both")
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<Area, M::Error> {
+                let (mut area, mut context) = (None, None);
+
+                // Every key the surrounding struct did not claim arrives here,
+                // so most of what this walks is none of its business and is
+                // dropped on the floor.
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "area" => area = Some(map.next_value()?),
+                        "context" => context = Some(map.next_value()?),
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+
+                // The new name wins where both arrived. They are the same value
+                // today, and on the day they are not it is the old one that has
+                // stopped being maintained.
+                Ok(Area(area.or(context).unwrap_or_default()))
+            }
+        }
+
+        deserializer.deserialize_map(AreaVisitor)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -148,7 +238,8 @@ impl CaptureKinds {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ledger {
-    pub context: String,
+    #[serde(flatten)]
+    pub area: Area,
     pub date: String,
     #[serde(default)]
     pub started_at: Option<String>,
@@ -214,7 +305,7 @@ mod tests {
 
     fn base() -> Ledger {
         Ledger {
-            context: "Work".into(),
+            area: "Work".into(),
             date: "2026-08-19".into(),
             started_at: Some("08:30".into()),
             ended_at: None,
@@ -336,5 +427,60 @@ mod tests {
         assert_eq!(ledger.gaps[0].minutes, 60);
         assert!(ledger.entries[0].is_work());
         assert_eq!(ledger.headline(), ("2:35".into(), "unaccounted"));
+    }
+
+    /// The smallest ledger Kaizen can send, with the naming pair written out
+    /// however the server of the day happens to write it.
+    fn named(naming: &str) -> Ledger {
+        let json = format!(
+            r#"{{ {naming}, "date": "2026-08-19", "phase": "accounting", "state": "quiet" }}"#
+        );
+
+        serde_json::from_str(&json).expect("parses")
+    }
+
+    // The three tests below are one test with three servers in it, and they are
+    // here because the rename is a rename in a DIFFERENT repository. Nothing in
+    // this crate compiles against Kaizen, so the only thing standing between a
+    // renamed field and a widget that quietly shows a blank name is a test that
+    // states the wire shape out loud. The `capture` field above is what that
+    // costs when nobody writes one.
+
+    #[test]
+    fn a_server_that_still_says_context_is_understood() {
+        assert_eq!(named(r#""context": "Work""#).area.as_str(), "Work");
+    }
+
+    #[test]
+    fn a_server_that_has_learned_area_is_understood_too() {
+        assert_eq!(named(r#""area": "Work""#).area.as_str(), "Work");
+    }
+
+    #[test]
+    fn both_names_at_once_is_the_state_the_migration_lives_in() {
+        // The whole reason this is not `#[serde(alias = "context")]`: serde
+        // counts a name and its alias as one field and rejects the pair as a
+        // duplicate, so the aliased version fails exactly here, on the only
+        // payload that is guaranteed to arrive.
+        assert_eq!(
+            named(r#""context": "Work", "area": "Work""#).area.as_str(),
+            "Work"
+        );
+        assert_eq!(
+            named(r#""area": "Work", "context": "Work""#).area.as_str(),
+            "Work",
+            "key order is not a promise anyone made"
+        );
+    }
+
+    #[test]
+    fn a_ledger_reaches_the_frontend_under_the_new_name() {
+        let json = serde_json::to_value(base()).expect("serializes");
+
+        assert_eq!(json["area"], "Work");
+        assert!(
+            json.get("context").is_none(),
+            "the page that reads this ships in the same binary and moved with it"
+        );
     }
 }

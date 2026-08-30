@@ -52,7 +52,7 @@ const entry = (from, to, minutes, title, referenced) =>
 
 const LEDGER = (over = {}) => ({
   capture: { activity: true, screen: true },
-  context: 'Work', date: '2026-08-19', state: 'attention', phase: 'accounting',
+  area: 'Work', date: '2026-08-19', state: 'attention', phase: 'accounting',
   window: '08:30 - 17:30', started_at: '08:34', logs_externally: true,
   target_minutes: 480, work_minutes: 331, gap_minutes: 95, unreferenced_minutes: 120,
   entries: [
@@ -73,7 +73,7 @@ const LONG = LEDGER({
 });
 
 const MONTH = {
-  month: '2026-08', label: 'August 2026', context: 'Work', first_weekday: 6,
+  month: '2026-08', label: 'August 2026', area: 'Work', first_weekday: 6,
   days: Array.from({ length: 31 }, (_, i) => {
     const date = `2026-08-${String(i + 1).padStart(2, '0')}`;
     const weekday = new Date(2026, 7, i + 1).getDay();

@@ -5,7 +5,7 @@
 //! module only carries the answer across. Two implementations of those rules
 //! would drift within a week.
 
-use crate::ledger::Ledger;
+use crate::ledger::{Area, Ledger};
 use serde::{Deserialize, Serialize};
 
 /// What `POST /api/desktop/hello` answers: enough to place ourselves, plus
@@ -58,7 +58,7 @@ pub struct Day {
 }
 
 impl Day {
-    /// The one the lamp shows. Where several contexts carry a target, the one
+    /// The one the lamp shows. Where several areas carry a target, the one
     /// with something to say wins, because a widget this small can only ask
     /// one question at a time.
     pub fn leading(&self) -> Option<&Ledger> {
@@ -79,13 +79,14 @@ impl Day {
 /// The clipboard text from `GET /api/desktop/prompt`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Prompt {
-    pub context: String,
+    #[serde(flatten)]
+    pub area: Area,
     pub date: String,
-    /// True when the context has no stored instructions yet, so the prompt
+    /// True when the area has no stored instructions yet, so the prompt
     /// asks to be taught rather than assuming it knows where time lives.
     #[serde(default)]
     pub bootstrap: bool,
-    /// Whether this context takes titles, and whether it takes screenshots —
+    /// Whether this area takes titles, and whether it takes screenshots —
     /// config Kaizen already holds. `fetch_prompt` uses these to decide what
     /// to attach and mention; the files themselves are never fetched from
     /// the server, only local. A screen-only day still writes a line per
@@ -107,8 +108,8 @@ pub struct Prompt {
 pub struct Month {
     pub month: String,
     pub label: String,
-    #[serde(default)]
-    pub context: String,
+    #[serde(flatten)]
+    pub area: Area,
     /// ISO weekday of the 1st, 1 = Monday, so the grid knows where to start.
     #[serde(default = "one")]
     pub first_weekday: u32,
@@ -222,9 +223,9 @@ mod tests {
         assert!(!hello.update_available);
     }
 
-    fn ledger(context: &str, state: State) -> Ledger {
+    fn ledger(area: &str, state: State) -> Ledger {
         Ledger {
-            context: context.into(),
+            area: area.into(),
             date: "2026-08-19".into(),
             started_at: None,
             ended_at: None,
@@ -246,7 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn the_loudest_context_is_the_one_the_lamp_shows() {
+    fn the_loudest_area_is_the_one_the_lamp_shows() {
         let day = Day {
             date: "2026-08-19".into(),
             local_time: Some("14:20".into()),
@@ -257,7 +258,7 @@ mod tests {
             ],
         };
 
-        assert_eq!(day.leading().unwrap().context, "Work");
+        assert_eq!(day.leading().unwrap().area.as_str(), "Work");
     }
 
     #[test]
@@ -273,7 +274,7 @@ mod tests {
             ],
         };
 
-        assert_eq!(day.leading().unwrap().context, "Waiting");
+        assert_eq!(day.leading().unwrap().area.as_str(), "Waiting");
     }
 
     #[test]
@@ -306,7 +307,7 @@ mod tests {
         let day: Day = serde_json::from_str(json).expect("parses");
         let leading = day.leading().expect("has one");
 
-        assert_eq!(leading.context, "Work");
+        assert_eq!(leading.area.as_str(), "Work");
         assert_eq!(leading.headline(), ("2:35".into(), "unaccounted"));
         assert_eq!(leading.gaps[0].minutes, 60);
     }
@@ -322,5 +323,25 @@ mod tests {
 
         assert!(prompt.bootstrap);
         assert!(prompt.prompt.starts_with("# Account for"));
+        assert_eq!(prompt.area.as_str(), "Work");
+    }
+
+    #[test]
+    fn a_prompt_reads_the_naming_pair_the_same_way_a_ledger_does() {
+        // Same rename, same overlap, different endpoint. Worth its own line
+        // because nothing about `Prompt` forces it to keep step with `Ledger`
+        // beyond both reaching for the same type.
+        for naming in [
+            r#""context": "Work""#,
+            r#""area": "Work""#,
+            r#""context": "Work", "area": "Work""#,
+        ] {
+            let json = format!(
+                r##"{{ {naming}, "date": "2026-08-19", "prompt": "# Account for Work" }}"##
+            );
+            let prompt: Prompt = serde_json::from_str(&json).expect("parses");
+
+            assert_eq!(prompt.area.as_str(), "Work", "from {naming}");
+        }
     }
 }
