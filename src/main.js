@@ -330,7 +330,7 @@ function render(l) {
     delta.textContent = hhmm(l.gap_minutes);
     deltaLabel.textContent = 'unaccounted';
   } else if (!l.started_at) {
-    delta.textContent = '—:—';
+    delta.textContent = '–:–';
     deltaLabel.textContent = 'day not started';
   } else {
     delta.textContent = hhmm(l.work_minutes);
@@ -403,7 +403,7 @@ function renderIdle(message) {
   stack.classList.remove(...STATE_CLASSES);
   stack.classList.add('lit-off');
   lamp.textContent = '灯';
-  delta.textContent = '—:—';
+  delta.textContent = '–:–';
   deltaLabel.textContent = '';
   sub.textContent = message;
   track.innerHTML = '';
@@ -1292,7 +1292,7 @@ async function fileEntries() {
   const title = editTitle.value.trim();
 
   if (!title) {
-    return complain('A title — short, business terms, what a colleague would recognise.');
+    return complain('A title: short, business terms, what a colleague would recognise.');
   }
 
   editFrom.value = from;

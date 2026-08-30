@@ -181,7 +181,7 @@ pub fn raise(window: &tauri::WebviewWindow) -> Result<(), String> {
 /// Whether any menu, anywhere on the system, is mid-track right now.
 ///
 /// `idThread = 0` asks for the foreground thread's own queue, which is
-/// whichever thread currently owns the topmost interaction — explorer's, for
+/// whichever thread currently owns the topmost interaction: explorer's, for
 /// the tray icon's native context menu, or ours, for anything drawn by the
 /// app itself. Either way this is the correct, general signal: it needs no
 /// list of windows to defer to, because it answers the actual question

@@ -86,13 +86,13 @@ pub struct Prompt {
     /// asks to be taught rather than assuming it knows where time lives.
     #[serde(default)]
     pub bootstrap: bool,
-    /// Whether this area takes titles, and whether it takes screenshots —
+    /// Whether this area takes titles, and whether it takes screenshots:
     /// config Kaizen already holds. `fetch_prompt` uses these to decide what
     /// to attach and mention; the files themselves are never fetched from
     /// the server, only local. A screen-only day still writes a line per
     /// tick (see capture::Recorder::push), just with no titles in it, so
     /// "the file has content" cannot answer whether the table is worth
-    /// showing — only this flag can.
+    /// showing; only this flag can.
     #[serde(default)]
     pub captures_activity: bool,
     #[serde(default)]

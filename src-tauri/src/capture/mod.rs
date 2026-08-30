@@ -272,7 +272,7 @@ impl<S: Source> Recorder<S> {
 
 /// Zip whichever loose frames exist for one 15-minute bucket. A free function
 /// rather than a method, so a startup sweep with no live `Recorder` can reuse
-/// the exact same logic a running one uses when a quarter rolls over — one
+/// the exact same logic a running one uses when a quarter rolls over: one
 /// path that may zip and delete, never two that could disagree.
 ///
 /// A zip is images only. The day's TSV already holds the record of every
@@ -610,7 +610,7 @@ mod tests {
         // "2026-...", and the comparison falls through to digits that are
         // now comparing an HOUR against a YEAR. Past that tie it reads as
         // greater, so the file flips from sorting before every dated name to
-        // sorting after all of them — and because 2020-2029 all start "202",
+        // sorting after all of them, and because 2020-2029 all start "202",
         // this is not a one-off quirk of this particular year.
         //
         // Prefixing the loose name with the day removes the coincidence
@@ -786,8 +786,8 @@ mod tests {
         // already has the full record, so an empty archive would say less
         // than none.
         //
-        // A fresh Recorder's very first frame is always Kept — there is
-        // nothing yet to compare it against — so this warms last_hash up in
+        // A fresh Recorder's very first frame is always Kept (there is
+        // nothing yet to compare it against), so this warms last_hash up in
         // the PRECEDING bucket first, and only then holds the screen still
         // for the one under test.
         let root = scratch();
@@ -818,7 +818,7 @@ mod tests {
     fn titles_without_pictures_gets_no_zip_either() {
         // A context may want to know which program was in front without a
         // photograph of what was in it. Since a zip is images only, that
-        // preference means no archive for the quarter at all — the day's
+        // preference means no archive for the quarter at all: the day's
         // TSV is the whole record.
         let root = scratch();
         let mut rec = Recorder::new(Fake::new(), root.clone(), 0);
@@ -896,7 +896,7 @@ mod tests {
     #[test]
     fn sealing_an_already_sealed_bucket_touches_nothing() {
         // The unplug-and-reconnect case: a zip already exists, so this must
-        // do nothing at all rather than repack, and — the specific worry —
+        // do nothing at all rather than repack, and (the specific worry)
         // must not delete a loose file that happens to still be lying beside
         // it, because deletion is only ever a consequence of THIS call
         // writing that exact zip, and this call is not writing one.

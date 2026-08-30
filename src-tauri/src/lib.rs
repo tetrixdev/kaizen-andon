@@ -647,7 +647,7 @@ fn fetch_prompt(app: AppHandle, date: Option<String>) -> Result<api::Prompt, Str
     // Gated on captures_activity, not on the file being non-empty: a
     // screen-only day still writes a line per tick (see
     // capture::Recorder::push), just with no process or title in it, so a
-    // non-empty file alone cannot say whether the table is worth showing —
+    // non-empty file alone cannot say whether the table is worth showing;
     // only Kaizen's own config for this context can.
     let day = prompt.date.clone();
 
@@ -668,9 +668,9 @@ fn fetch_prompt(app: AppHandle, date: Option<String>) -> Result<api::Prompt, Str
         prompt.prompt.push_str("\n```");
     }
 
-    // The pictures themselves are still never attached — a title is a line
+    // The pictures themselves are still never attached (a title is a line
     // naming a program and a window, a picture is everything that was on the
-    // screen, including whatever somebody else sent you — but an AI reading
+    // screen, including whatever somebody else sent you), but an AI reading
     // this has no way to know they even exist unless told, so a context that
     // takes them gets one line saying so and how to ask for a specific one.
     if prompt.captures_screen {
@@ -957,7 +957,7 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = place_window(window.clone(), false, None);
 
-                // DISABLED, 25 Aug 2026 — not removed, deliberately paused.
+                // DISABLED, 25 Aug 2026: not removed, deliberately paused.
                 //
                 // This held the front of the topmost band every 2 seconds,
                 // because another always-on-top app (Claude's desktop app is

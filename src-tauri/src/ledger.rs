@@ -287,7 +287,7 @@ impl Ledger {
                 (hhmm(self.unreferenced_minutes), "not in the other system")
             }
             _ if self.gap_minutes > 0 => (hhmm(self.gap_minutes), "unaccounted"),
-            _ if self.started_at.is_none() => ("—:—".into(), "day not started"),
+            _ if self.started_at.is_none() => ("–:–".into(), "day not started"),
             _ => (hhmm(self.work_minutes), "accounted for"),
         }
     }
