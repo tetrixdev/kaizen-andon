@@ -65,10 +65,16 @@ const endBtn = document.getElementById('endBtn');
 const STATE_CLASSES = ['lit-wait', 'lit-ok', 'lit-warm', 'lit-call', 'lit-off'];
 const LAMP_FOR = { waiting: 'lit-wait', running: 'lit-ok', attention: 'lit-warm', call: 'lit-call', quiet: 'lit-off' };
 
-// Under the threshold the lamp is barely saying anything, so asking often is
-// waste. Once it has something to say, look more often.
-const CALM_MS = 5 * 60 * 1000;
-const LOUD_MS = 60 * 1000;
+// One minute, whatever the lamp is saying.
+//
+// This used to back off to five minutes under the threshold, on the reasoning
+// that a quiet lamp has little to report. What that missed is that the number
+// on the card is minutes of unaccounted time, which grows by one every minute
+// whether or not anyone is listening: a five-minute poll made it visibly jump
+// in five-minute steps, so the one figure the widget exists to show was wrong
+// for most of the time it was on screen. A request a minute is nothing; a
+// counter that lies is the whole product.
+const POLL_MS = 60 * 1000;
 
 let expanded = false;
 let ledger = null;
@@ -326,8 +332,8 @@ function render(l) {
   if (l.phase === 'referencing' && l.unreferenced_minutes > 0) {
     delta.textContent = hhmm(l.unreferenced_minutes);
     deltaLabel.textContent = 'not in the other system';
-  } else if (l.gap_minutes > 0) {
-    delta.textContent = hhmm(l.gap_minutes);
+  } else if (liveGapMinutes(l) > 0) {
+    delta.textContent = hhmm(liveGapMinutes(l));
     deltaLabel.textContent = 'unaccounted';
   } else if (!l.started_at) {
     delta.textContent = '–:–';
@@ -418,7 +424,7 @@ async function refresh() {
     // A finished day cannot change on its own, so looking back stops the
     // polling entirely rather than asking the same question every minute.
     if (viewDate) return;
-    if (!leading) return schedule(CALM_MS);
+    if (!leading) return schedule(POLL_MS);
 
     // A snooze lapses the moment the lamp has something else to say, and that
     // is exactly the case this widget exists for, so it must not stay hidden.
@@ -426,7 +432,7 @@ async function refresh() {
       invoke('wake').catch(() => {});
     }
 
-    schedule(['call', 'attention'].includes(leading.state) ? LOUD_MS : CALM_MS);
+    schedule(POLL_MS);
   } catch (e) {
     // A network blip must not blank the card: keep the last reading and say
     // it is stale rather than pretending the day is suddenly empty.
@@ -435,7 +441,7 @@ async function refresh() {
     } else {
       failed(sub, `fetch_day for ${viewDate ?? 'today'}`, e, { date: viewDate });
     }
-    schedule(LOUD_MS);
+    schedule(POLL_MS);
   }
 }
 
@@ -449,6 +455,36 @@ function schedule(ms) {
   clearTimeout(timer);
   timer = setTimeout(refresh, ms);
 }
+
+/**
+ * Roll the headline over on the minute, independently of the poll.
+ *
+ * Polling every minute is not the same as being right every minute: a poll can
+ * land late, be slow, or fail, and the counter would then sit on a number the
+ * user can see is wrong by looking at their own clock. This advances it from
+ * the local clock instead and lets the next answer correct it, which is the
+ * same bargain the track's now-line already makes.
+ *
+ * Deliberately touches only the headline. A full re-render would rebuild the
+ * entry list under whatever the user is doing with it, and the one figure that
+ * goes stale is this one.
+ */
+let shownMinute = null;
+
+setInterval(() => {
+  const minute = nowMinutes();
+  if (minute === shownMinute) return;
+  shownMinute = minute;
+
+  if (!ledger || viewDate) return;
+  if (ledger.phase === 'referencing' && ledger.unreferenced_minutes > 0) return;
+
+  const live = liveGapMinutes(ledger);
+  if (live > 0) {
+    delta.textContent = hhmm(live);
+    deltaLabel.textContent = 'unaccounted';
+  }
+}, 5000);
 
 // ── Sizing ──────────────────────────────────────────────────────────────
 //
@@ -1050,8 +1086,8 @@ entriesEl.addEventListener('click', (event) => {
  * Kaizen's clock, kept running between polls.
  *
  * Only the offset comes from the server. Reading `local_time` straight off the
- * last answer means every clock in the widget is as stale as the last poll,
- * which is up to five minutes: the now-line stops advancing, the cover over
+ * last answer means every clock in the widget is as stale as the last poll:
+ * the now-line stops advancing, the cover over
  * time that has not happened stops moving with it, and "the whole gap" fills
  * in an end that was true when the page last asked. Anchoring the server's
  * time to a local stopwatch keeps the timezone right and the minute live.
@@ -1070,6 +1106,34 @@ function nowMinutes() {
   }
 
   return (started.minutes + Math.floor((Date.now() - started.at) / 60000)) % 1440;
+}
+
+/**
+ * The unaccounted total, advanced to this minute rather than the last poll's.
+ *
+ * `gap_minutes` is computed server-side and frozen the moment it is sent, so
+ * between polls the headline is stale by however long ago that was. The same
+ * problem the local clock above was written for, one value over.
+ *
+ * It is NOT simply "add the minutes since the poll": the gap only grows while
+ * a gap is actually open. A day that has ended, or a minute already covered by
+ * a filed entry, does not accrue anything, and adding to those would invent
+ * unaccounted time that does not exist. The test is the one the track already
+ * relies on: Kaizen reports gaps only up to the moment it answered, so the gap
+ * still running is the one whose end IS that moment. If the last gap ended
+ * earlier than that, the clock is inside an entry and nothing is accruing.
+ */
+function liveGapMinutes(l) {
+  const gaps = l.gaps ?? [];
+
+  if (viewDate || !l.started_at || l.ended_at || !started || gaps.length === 0) {
+    return l.gap_minutes;
+  }
+
+  const openEnd = toMinutes(gaps[gaps.length - 1].to);
+  if (openEnd < started.minutes) return l.gap_minutes;
+
+  return l.gap_minutes + Math.max(0, nowMinutes() - started.minutes);
 }
 
 /** Now as a clock reading, or null before the server has ever answered. */

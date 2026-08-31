@@ -106,10 +106,16 @@ fn refresh_capture_menu(app: &AppHandle) {
 
 /// How old Kaizen's answer may be before it stops counting as an answer.
 ///
-/// Comfortably longer than the five-minute quiet poll, so an ordinary slow
-/// cycle does not stutter capture, and short enough that a page which has
-/// stopped polling entirely stops capture within a couple of minutes.
-const WINDOW_ANSWER_TTL: std::time::Duration = std::time::Duration::from_secs(6 * 60);
+/// Comfortably longer than the one-minute poll, so an ordinary slow cycle does
+/// not stutter capture, and short enough that a page which has stopped polling
+/// entirely stops capture quickly.
+///
+/// This was six minutes while the page backed off to a five-minute poll when
+/// the lamp was quiet. That back-off is gone, and the number had to come down
+/// with it: this is the window in which a dead page keeps the recorder running,
+/// so sizing it against a poll interval that no longer exists would have left
+/// capture alive five minutes longer than anything now justifies.
+const WINDOW_ANSWER_TTL: std::time::Duration = std::time::Duration::from_secs(3 * 60);
 
 use ledger::CaptureKinds;
 
@@ -569,10 +575,10 @@ fn paused_now(config: &state::Config) -> bool {
 
 /// What Kaizen last said may be recorded, if that answer still counts.
 ///
-/// A stale answer is nothing at all rather than a stale yes: polling slows to
-/// five minutes when the lamp is quiet, and a stale yes would keep recording
-/// past the end of a window. Erring this way costs evidence; erring the other
-/// way records someone's evening.
+/// A stale answer is nothing at all rather than a stale yes: a page can stop
+/// answering without saying so, and a stale yes would keep recording past the
+/// end of a window. Erring this way costs evidence; erring the other way
+/// records someone's evening.
 fn window_kinds(app: &AppHandle) -> CaptureKinds {
     app.state::<Lamp>()
         .capture_window

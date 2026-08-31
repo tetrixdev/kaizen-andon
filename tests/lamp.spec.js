@@ -102,6 +102,7 @@ const bridge = (config, day, connectError) => `
           (window.__opacity = window.__opacity || []).push(el ? Number(getComputedStyle(el).opacity) : 1);
         }
         if (cmd === 'load_config') return ${JSON.stringify(config)};
+        if (cmd === 'fetch_day' && window.__failDay) throw new Error('offline');
         if (cmd === 'fetch_day') return { local_time: '14:20', ...${JSON.stringify(day)} };
         if (cmd === 'fetch_prompt') return { prompt: 'x', bootstrap: false };
         if (cmd === 'connect' && ${JSON.stringify(connectError)}) throw new Error(${JSON.stringify(connectError)});
@@ -298,6 +299,68 @@ for (const state of STATES) {
     await page.screenshot({ path: `state-${state.name}.png` });
   });
 }
+
+test('the unaccounted headline advances between polls, and only while a gap is open', async ({ page }) => {
+  // The number on the card is minutes of unaccounted time, and it grows by one
+  // every minute. It used to come straight off the last poll, so it sat wrong
+  // between them. It is advanced from the local clock now, which is only
+  // correct while a gap is actually open: a day that has ended, or a minute
+  // already covered by an entry, accrues nothing, and adding to those would
+  // invent unaccounted time that never happened.
+  const LOCAL = '13:30';
+  const openGap = (over = {}) => LEDGER({
+    state: 'running', phase: 'accounting', started_at: '08:34',
+    gap_minutes: 30, gaps: [{ from: '13:00', to: LOCAL, minutes: 30 }], ...over,
+  });
+
+  const headline = async (day) => {
+    await page.setViewportSize({ width: 292, height: 88 });
+    await page.addInitScript(bridge(CONNECTED, { ...day, local_time: LOCAL }, null));
+    await page.goto(PAGE);
+    await settle(page);
+    return page.evaluate(() => document.querySelector('#delta').textContent);
+  };
+
+  // At the moment of the answer it is simply what Kaizen said.
+  expect(await headline({ ledgers: [openGap()] })).toBe('0:30');
+
+  // A gap that ended before the answer means the clock is inside an entry:
+  // nothing is accruing, so nothing may be added.
+  expect(await headline({ ledgers: [openGap({
+    gaps: [{ from: '11:00', to: '12:00', minutes: 30 }],
+  })] })).toBe('0:30');
+
+  // A day that has been called is finished, however long ago that was.
+  expect(await headline({ ledgers: [openGap({ ended_at: '13:00' })] })).toBe('0:30');
+});
+
+test('the unaccounted headline ticks on without waiting for the next poll', async ({ page }) => {
+  // The half the guards above cannot show: that it actually moves. The clock
+  // is faked so three minutes pass without three minutes passing, and the poll
+  // is deliberately left to fail after the first answer, because the point is
+  // that the figure stays right when the network does not.
+  await page.clock.install();
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, {
+    local_time: '13:30',
+    ledgers: [LEDGER({
+      state: 'running', phase: 'accounting', started_at: '08:34',
+      gap_minutes: 30, gaps: [{ from: '13:00', to: '13:30', minutes: 30 }],
+    })],
+  }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  expect(await page.evaluate(() => document.querySelector('#delta').textContent)).toBe('0:30');
+
+  // From here the server is unreachable, so the only thing that can move the
+  // figure is the local clock. (A reachable server would re-anchor it on every
+  // poll, which is the correct behaviour and would hide what this is testing.)
+  await page.evaluate(() => { window.__failDay = true; });
+  await page.clock.fastForward('03:00');
+  await expect.poll(() => page.evaluate(() => document.querySelector('#delta').textContent))
+    .toBe('0:33');
+});
 
 test('a past day stops polling and drops the now line', async ({ page }) => {
   await page.setViewportSize({ width: 292, height: 88 });
