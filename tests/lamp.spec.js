@@ -1470,6 +1470,65 @@ test('the capture folder can be opened from the dot', async ({ page }) => {
   await expect(page.locator('#recMenu')).toBeHidden();
 });
 
+test('a time field takes four bare digits and looks after its own colon', async ({ page }) => {
+  // Typing a time is the most repeated action in the editor, so it has to
+  // survive being typed fast: no reaching for the colon, no reaching for the
+  // mouse to clear what is already there.
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+  await page.locator('#track .seg.gap').first().click();
+  await settle(page);
+
+  const from = page.locator('#editFrom');
+
+  // Focus selects, so typing replaces rather than appends to the time that is
+  // already sitting there.
+  await from.focus();
+  expect(await page.evaluate(() => {
+    const el = document.querySelector('#editFrom');
+    return el.selectionEnd - el.selectionStart === el.value.length && el.value.length > 0;
+  }), 'the whole value is selected on focus').toBe(true);
+
+  await from.press('Control+a');
+  await from.pressSequentially('0945');
+  await expect(from).toHaveValue('09:45');
+
+  // A fifth digit is refused rather than accepted and complained about later.
+  await from.pressSequentially('7');
+  await expect(from).toHaveValue('09:45');
+
+  // Backspace never lands on the colon: the digits shrink and it leaves.
+  await from.press('Backspace');
+  await expect(from).toHaveValue('09:4');
+  await from.press('Backspace');
+  await expect(from).toHaveValue('09');
+});
+
+test('930 is half past nine, and 9301 is an error rather than a guess', async ({ page }) => {
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+  await open(page);
+  await page.locator('#track .seg.gap').first().click();
+  await settle(page);
+
+  // 93 is not an hour, so the only reading left is 9:30.
+  // Zero-padded, because that is the one shape the rest of the app stores.
+  expect(await page.evaluate(() => window.__normalise('930'))).toBe('09:30');
+  expect(await page.evaluate(() => window.__normalise('0945'))).toBe('09:45');
+  expect(await page.evaluate(() => window.__normalise('9:05'))).toBe('09:05');
+  expect(await page.evaluate(() => window.__normalise('1:5'))).toBe('01:05');
+
+  // A fourth digit removes the escape route: 93:01 has no legal reading, and
+  // inventing one would file a span the user never asked for.
+  expect(await page.evaluate(() => window.__normalise('9301'))).toBe(null);
+  expect(await page.evaluate(() => window.__normalise('2500'))).toBe(null);
+});
+
 test('the editor refuses to file without a title', async ({ page }) => {
   // Server-side this is already enforced (DesktopLedgerController requires
   // it), but a raw 422 from a blank title reads as the app being broken.

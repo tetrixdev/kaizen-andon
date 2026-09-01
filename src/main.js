@@ -37,6 +37,14 @@ const editorDelete = document.getElementById('editorDelete');
 const editFrom = document.getElementById('editFrom');
 const editTo = document.getElementById('editTo');
 const editFromLabel = document.getElementById('editFromLabel');
+
+// Both time fields, wired the moment they exist rather than on first open,
+// so no path into the editor can reach an unmasked one.
+[editFrom, editTo].forEach(maskTimeField);
+
+// Reachable from the frontend tests, which have no other way to reach a
+// module-scoped helper. Costs nothing and keeps the parsing rules honest.
+window.__normalise = (text) => normaliseClock(text);
 const editQuick = document.getElementById('editQuick');
 const editKind = document.getElementById('editKind');
 const editTitle = document.getElementById('editTitle');
@@ -109,16 +117,79 @@ const clock = (m) => {
 };
 
 /** Whatever the user typed, in the form Kaizen accepts. `9:5` is 09:05. */
+/**
+ * A typed time, however it was typed: 09:45, 9.45, 0945, or 930.
+ *
+ * Candidates are tried in the order a person most likely meant them and the
+ * first legal one wins. That is what lets 930 be half past nine: read as
+ * hours-first it is 93:0, and 93 is not an hour, so the only reading left is
+ * 9:30. It is also what makes 9301 an error rather than a guess, which is the
+ * point: a field that silently reinterprets a fourth digit would file the
+ * wrong span without ever saying so.
+ */
 const normaliseClock = (text) => {
-  const match = /^\s*(\d{1,2})\s*[:.]\s*(\d{1,2})\s*$/.exec(String(text ?? ''));
-  if (!match) return null;
+  const raw = String(text ?? '').trim();
+  const digits = raw.replace(/\D/g, '');
+  const candidates = [];
 
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  if (hours > 23 || minutes > 59) return null;
+  // A separator says where the user meant to split, so it is tried first.
+  const split = /^(\d{1,2})\s*[:.]\s*(\d{1,2})$/.exec(raw);
+  if (split) candidates.push([Number(split[1]), Number(split[2])]);
 
-  return clock(hours * 60 + minutes);
+  if (digits.length === 3) {
+    candidates.push([Number(digits.slice(0, 2)), Number(digits.slice(2))]);
+    candidates.push([Number(digits.slice(0, 1)), Number(digits.slice(1))]);
+  }
+  if (digits.length === 4) {
+    candidates.push([Number(digits.slice(0, 2)), Number(digits.slice(2))]);
+  }
+
+  for (const [hours, minutes] of candidates) {
+    if (hours <= 23 && minutes <= 59) return clock(hours * 60 + minutes);
+  }
+
+  return null;
 };
+
+/**
+ * Make a time field behave like one: four digits, and the colon looks after
+ * itself.
+ *
+ * Focus selects, because every edit here is a replacement rather than a
+ * correction: the field arrives holding a real time already, and the fastest
+ * thing anyone does with it is type over the whole thing.
+ *
+ * The value is re-derived from its digits on every keystroke, which is what
+ * makes backspace skip the colon rather than land on it: there is no colon to
+ * delete, only a digit count that shrinks. Four digits is the ceiling, so a
+ * fifth is simply not accepted rather than accepted and later refused.
+ */
+function maskTimeField(input) {
+  input.addEventListener('focus', () => input.select());
+
+  input.addEventListener('input', () => {
+    const raw = input.value;
+    const colon = raw.indexOf(':');
+
+    // A colon with something after it was put there on purpose, by a paste or
+    // by someone who types the separator, and it says where the split goes:
+    // 9:5 is five past nine, which the digits alone (95) cannot express.
+    if (colon > 0 && /\d/.test(raw.slice(colon + 1))) {
+      const hours = raw.slice(0, colon).replace(/\D/g, '').slice(0, 2);
+      const minutes = raw.slice(colon + 1).replace(/\D/g, '').slice(0, 2);
+      input.value = `${hours}:${minutes}`;
+    } else {
+      // Nothing after it means the colon is being backspaced through, so it
+      // goes rather than sitting there needing a second press to clear.
+      const digits = raw.replace(/\D/g, '').slice(0, 4);
+      input.value = digits.length > 2 ? `${digits.slice(0, 2)}:${digits.slice(2)}` : digits;
+    }
+
+    // Typing here is left to right, and the caret has to follow the colon the
+    // mask just inserted rather than stay behind it.
+    input.setSelectionRange(input.value.length, input.value.length);
+  });
+}
 const toMinutes = (t) => {
   const [h, m] = String(t ?? '0:00').split(':').map(Number);
   return (h || 0) * 60 + (m || 0);
