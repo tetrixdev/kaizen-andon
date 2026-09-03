@@ -839,17 +839,38 @@ body {
    than as a fact. It takes the lamp's own ink and breathes slowly, which is
    noticeable when looked at and quiet when not. What matters is only that it
    is impossible to be recording with nothing on screen saying so. */
+/* Pushed to the far right of the row, which is the only place on this card
+   that is always the same distance from the eye whatever the number says. */
+.rec-wrap {
+  position: relative;
+  margin-left: auto;
+  align-self: center;
+  flex: none;
+}
+
+/* A dot alone was easy to miss and impossible to guess was clickable. The
+   square gives it an edge to aim at and says it is a control; the dot inside
+   goes on doing the saying. */
 .rec {
-  width: 7px;
-  border: 0;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
   padding: 0;
   cursor: pointer;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--paper);
+}
+
+.rec:hover { border-color: var(--ink-soft); }
+
+.rec::before {
+  content: '';
+  width: 7px;
   height: 7px;
-  margin-left: 7px;
   border-radius: 50%;
   background: var(--lamp, var(--ink));
-  flex: none;
-  align-self: center;
   animation: rec-breathe 3.2s ease-in-out infinite;
 }
 
@@ -859,16 +880,20 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .rec { animation: none; opacity: .85; }
+  .rec::before { animation: none; opacity: .85; }
 }
 
 /* The dot's own menu. Anchored to the card rather than floating free, because
    this window is 292px wide when shut and anything wider than it would be
    clipped by the OS rather than by us. */
+/* Upward, always. The window lives in the bottom-right corner of the screen,
+   so anything opening downward runs into the taskbar and is cut off. There is
+   room above because contentHeight() counts this menu while it is open and the
+   page is bottom-aligned, so the window grows up to make the space. */
 .rec-menu {
   position: absolute;
-  right: 10px;
-  top: 26px;
+  right: 0;
+  bottom: calc(100% + 8px);
   z-index: 40;
   display: flex;
   flex-direction: column;

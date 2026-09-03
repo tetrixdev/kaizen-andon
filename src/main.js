@@ -61,6 +61,7 @@ const bannerText = document.getElementById('bannerText');
 const pop = document.getElementById('pop');
 const rec = document.getElementById('rec');
 const recMenu = document.getElementById('recMenu');
+const recWrap = document.getElementById('recWrap');
 const recState = document.getElementById('recState');
 const popTitle = document.getElementById('popTitle');
 const popSpan = document.getElementById('popSpan');
@@ -447,7 +448,7 @@ function render(l) {
   // earns recording. Rust deliberately does not work it out for itself: the
   // rule lives in the ledger, and a second copy here would be free to drift
   // from it. Rust treats a stale answer as no.
-  invoke('set_lamp', { state: l.state ?? '', capture: l.capture ?? null }).catch(() => {});
+
 
   // A day that never started can hold nothing, so that is the only thing
   // worth offering until it has.
@@ -487,14 +488,33 @@ function renderIdle(message) {
   entriesEl.innerHTML = '';
 }
 
+/**
+ * Tell Rust what the lamp is and whether this minute earns recording.
+ *
+ * Always about NOW, never about the day on screen. Rust treats an answer
+ * older than its TTL as "do not record", so this is a heartbeat as much as a
+ * message: it stopping is what stops the recorder.
+ */
+function pushLamp(l) {
+  invoke('set_lamp', { state: l?.state ?? '', capture: l?.capture ?? null }).catch(() => {});
+}
+
 async function refresh() {
   try {
-    const day = await invoke('fetch_day', { date: viewDate });
-    const leading = apply(day);
+    // Always today, whatever is on screen. Capture and the tray follow the
+    // clock rather than the view, and a past day is static anyway: fetching
+    // the one being looked at would answer the wrong question and, because
+    // that answer is also the capture heartbeat, would quietly stop the
+    // recorder for as long as the history stayed open.
+    const day = await invoke('fetch_day', { date: null });
+    const leading = pickLeading(day.ledgers ?? []);
+    pushLamp(leading);
 
-    // A finished day cannot change on its own, so looking back stops the
-    // polling entirely rather than asking the same question every minute.
-    if (viewDate) return;
+    // A day already gone by cannot change, so it is not re-rendered. The
+    // timer keeps running regardless, because the heartbeat above has to.
+    if (viewDate) return schedule(POLL_MS);
+
+    apply(day);
     if (!leading) return schedule(POLL_MS);
 
     // A snooze lapses the moment the lamp has something else to say, and that
@@ -590,10 +610,18 @@ function contentHeight() {
   }
   card.classList.toggle('stacked', panels[0] !== card);
 
+  // The capture menu is out of flow but not out of the window. It opens
+  // upward, and the page is bottom-aligned, so counting it is what puts the
+  // room above the card rather than leaving it to be sliced off at the edge.
+  const menuRoom = recMenu && !recMenu.hidden
+    ? recMenu.getBoundingClientRect().height + 8
+    : 0;
+
   return Math.ceil(
     stack.getBoundingClientRect().height +
       parseFloat(style.paddingTop) +
-      parseFloat(style.paddingBottom),
+      parseFloat(style.paddingBottom) +
+      menuRoom,
   );
 }
 
@@ -1650,6 +1678,16 @@ async function look(date) {
   document.body.classList.toggle('past', !!date);
   if (date) bannerText.textContent = `Looking at ${dayLabel(date)}`;
 
+  // The day being looked at is fetched here rather than by refresh(), which
+  // now only ever speaks for today because it carries the capture heartbeat.
+  if (date) {
+    try {
+      apply(await invoke('fetch_day', { date }));
+    } catch (e) {
+      await failed(sub, `fetch_day for ${date}`, e, { date });
+    }
+  }
+
   await refresh();
   fit(true);
 }
@@ -1703,12 +1741,15 @@ history.addEventListener('click', (event) => event.stopPropagation());
 // and the app may launch mid-window with capture already running.
 
 function showRecording(on) {
-  if (rec) rec.hidden = !on;
+  if (recWrap) recWrap.hidden = !on;
   if (!on) closeRecMenu();
 }
 
 function closeRecMenu() {
-  if (recMenu) recMenu.hidden = true;
+  if (!recMenu || recMenu.hidden) return;
+  recMenu.hidden = true;
+  // The window was made taller to hold it, so it has to come back down.
+  fit(true);
 }
 
 /** Read the truth from the recorder, never from what the page last assumed. */
@@ -1742,6 +1783,9 @@ rec?.addEventListener('click', async (event) => {
   const opening = recMenu.hidden;
   await refreshCapture();
   recMenu.hidden = !opening;
+  // Absolutely positioned, so the page does not grow for it on its own and
+  // the window would clip it. contentHeight() counts it while it is open.
+  fit(true);
 });
 
 document.getElementById('recPauseHour')?.addEventListener('click', async (event) => {

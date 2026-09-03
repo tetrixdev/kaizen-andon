@@ -118,11 +118,13 @@
         <span class="delta-label" id="deltaLabel">not connected</span>
         <!-- Shown only while frames are actually being written. Capture that
              leaves no mark on screen is capture nobody consented to twice. -->
-        <button class="rec" id="rec" hidden type="button"
+        <!-- Wrapped so the menu hangs off the button rather than off the
+             card: the thing telling you it is recording is the thing that
+             stops it, and it should look attached to it. -->
+        <div class="rec-wrap" id="recWrap" hidden>
+        <button class="rec" id="rec" type="button"
                 title="Capturing this screen · click for options"></button>
 
-        <!-- Opened from the dot. The control belongs where the fact is: the
-             thing telling you it is recording is the thing that stops it. -->
         <div class="rec-menu" id="recMenu" hidden>
           <div class="rec-state" id="recState"></div>
           <button class="rec-item" id="recPauseHour" type="button">Pause for an hour</button>
@@ -132,6 +134,7 @@
           </label>
           <button class="rec-item" id="recStop" type="button">Stop capturing today</button>
           <button class="rec-item" id="recFolder" type="button">Open capture folder</button>
+        </div>
         </div>
       </div>
       <div class="sub" id="sub">Point it at your Kaizen to begin</div>

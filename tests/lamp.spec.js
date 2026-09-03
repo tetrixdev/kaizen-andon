@@ -362,7 +362,7 @@ test('the unaccounted headline ticks on without waiting for the next poll', asyn
     .toBe('0:33');
 });
 
-test('a past day stops polling and drops the now line', async ({ page }) => {
+test('a past day drops the now line and cannot be snoozed', async ({ page }) => {
   await page.setViewportSize({ width: 292, height: 88 });
   await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
   await page.goto(PAGE);
@@ -379,16 +379,51 @@ test('a past day stops polling and drops the now line', async ({ page }) => {
   await expect(page.locator('#track .now')).toHaveCount(0);
   await expect(page.locator('#snoozeBtn')).toBeHidden();
 
-  const before = await page.evaluate(() =>
-    window.__calls.filter(([c]) => c === 'fetch_day').length);
-  await page.waitForTimeout(1200);
-  const after = await page.evaluate(() =>
-    window.__calls.filter(([c]) => c === 'fetch_day').length);
-  expect(after, 'a finished day cannot change, so it must not be re-asked').toBe(before);
-
   await page.locator('#backToToday').click();
   await expect(page.locator('#banner')).toBeHidden();
   await expect(page.locator('#discuss')).toContainText('today');
+});
+
+test('looking at history keeps the recorder alive, and asks about today to do it', async ({ page }) => {
+  // The bug this pins: the capture heartbeat rode on the same poll that drew
+  // the card, and opening history stopped that poll. Rust treats an answer
+  // older than its TTL as "do not record", so browsing yesterday quietly
+  // stopped recording today, and nothing on screen said so.
+  await page.clock.install();
+  await page.setViewportSize({ width: 292, height: 88 });
+  await page.addInitScript(bridge(CONNECTED, { ledgers: [LEDGER()] }, null));
+  await page.goto(PAGE);
+  await settle(page);
+
+  await open(page);
+  await page.locator('#historyBtn').click();
+  await page.locator('.tile[data-date="2026-08-14"]').click();
+  await expect(page.locator('#banner')).toBeVisible();
+
+  await page.evaluate(() => { window.__calls.length = 0; });
+
+  // Stepped a minute at a time, with real time in between: refresh() is async
+  // and only arms the next timer once its fetch resolves, so running the whole
+  // stretch in one jump would fire once and find nothing scheduled after it.
+  for (let i = 0; i < 3; i++) {
+    await page.clock.runFor(60_000);
+    await new Promise((r) => setTimeout(r, 60));
+  }
+
+  const calls = await page.evaluate(() => window.__calls);
+  const days = calls.filter(([c]) => c === 'fetch_day');
+
+  // More than one, deliberately. A single poll proves nothing: the timer
+  // scheduled before history was opened fires once regardless, so a test that
+  // accepted one would pass with the bug still in place. It has to keep going.
+  expect(days.length, 'the heartbeat kept polling, not just once').toBeGreaterThan(1);
+  expect(calls.some(([c]) => c === 'set_lamp'), 'and kept telling Rust').toBe(true);
+
+  // Asking for the day on screen would answer the wrong question: capture is
+  // about now, and a day in August has nothing to say about whether this
+  // minute earns recording.
+  expect(days.every(([, args]) => (args?.date ?? null) === null),
+    'every poll asked about today, not the day being looked at').toBe(true);
 });
 
 test('clicking a gap fills the span in rather than asking for it', async ({ page }) => {
@@ -1397,6 +1432,9 @@ test('the dot carries the controls, and says when a pause ends', async ({ page }
 
   await page.locator('#rec').click();
   await expect(page.locator('#recMenu')).toBeVisible();
+  // The menu opens upward and the window grows for it, so the harness has to
+  // take the new size before anything inside it can be clicked.
+  await settle(page);
 
   // A pause is stated with its end, not as a bare "paused": knowing it lapses
   // at 14:30 is the whole difference between a pause and a mystery.

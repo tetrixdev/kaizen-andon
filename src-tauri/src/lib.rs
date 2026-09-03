@@ -893,7 +893,21 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
-            let menu = Menu::with_items(app, &[&show, &hide, &toggle, &pause, &folder, &quit])?;
+            // Disabled, because it is a label rather than a control. The app
+            // updates itself silently at launch, so "did that fix reach me
+            // yet" is otherwise unanswerable from inside the app: the only
+            // way to tell was to look for the behaviour and guess.
+            let version = MenuItem::with_id(
+                app,
+                "version",
+                format!("Kaizen {}", app.package_info().version),
+                false,
+                None::<&str>,
+            )?;
+            let menu = Menu::with_items(
+                app,
+                &[&show, &hide, &toggle, &pause, &folder, &version, &quit],
+            )?;
 
             if let Ok(mut slot) = app.state::<Lamp>().capture_menu.lock() {
                 *slot = Some((toggle.clone(), pause.clone()));
